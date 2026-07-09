@@ -1,0 +1,13 @@
+# Generated build and package artifacts
+openclaw-pet/dist/
+openclaw-pet/node_modules/
+openclaw-pet/*.tgz
+
+# Local pet-generation runs and supplied pet art stay private by default
+.pet-runs/
+openclaw-pet/pets/
+
+# Local environment and OS files
+.DS_Store
+.env
+.env.*

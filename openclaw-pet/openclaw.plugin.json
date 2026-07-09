@@ -1,0 +1,30 @@
+{
+  "id": "openclaw-pet",
+  "name": "OpenClaw Pet",
+  "description": "A privacy-preserving desktop pet that reflects OpenClaw activity.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "assetDir": { "type": "string", "description": "Absolute path containing pet.json and spritesheet.webp." },
+      "enabled": { "type": "boolean", "default": true },
+      "idleDelayMs": { "type": "integer", "minimum": 250, "default": 2500 },
+      "scope": { "type": "string", "enum": ["global"], "default": "global" },
+      "overlay": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": true },
+          "size": { "type": "integer", "minimum": 96, "maximum": 768, "default": 224 },
+          "corner": { "type": "string", "enum": ["bottom-right", "bottom-left", "top-right", "top-left"], "default": "bottom-right" }
+        }
+      }
+    },
+    "required": ["assetDir"]
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {}
+}

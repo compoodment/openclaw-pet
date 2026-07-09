@@ -1,0 +1,57 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+export const ANIMATIONS = {
+  idle: { row: 0, frames: 6, durations: [280, 110, 110, 140, 140, 320] },
+  "running-right": { row: 1, frames: 8, durations: [120, 120, 120, 120, 120, 120, 120, 220] },
+  "running-left": { row: 2, frames: 8, durations: [120, 120, 120, 120, 120, 120, 120, 220] },
+  waving: { row: 3, frames: 4, durations: [140, 140, 140, 280] },
+  jumping: { row: 4, frames: 5, durations: [140, 140, 140, 140, 280] },
+  failed: { row: 5, frames: 8, durations: [140, 140, 140, 140, 140, 140, 140, 240] },
+  waiting: { row: 6, frames: 6, durations: [150, 150, 150, 150, 150, 260] },
+  running: { row: 7, frames: 6, durations: [120, 120, 120, 120, 120, 220] },
+  review: { row: 8, frames: 6, durations: [150, 150, 150, 150, 150, 280] },
+} as const;
+
+export type Animation = keyof typeof ANIMATIONS;
+export type PetConfig = { assetDir?: string; enabled?: boolean; idleDelayMs?: number; scope?: "global"; overlay?: { enabled?: boolean; size?: number; corner?: "bottom-right" | "bottom-left" | "top-right" | "top-left" } };
+export type PetSnapshot = { valid: boolean; assetDir?: string; animation: Animation; changedAt: number; activeRuns: number; lastError?: string; message: string };
+
+function webpDimensions(buffer: Buffer): { width: number; height: number } | null {
+  if (buffer.subarray(0, 4).toString() !== "RIFF" || buffer.subarray(8, 12).toString() !== "WEBP") return null;
+  const kind = buffer.subarray(12, 16).toString();
+  if (kind === "VP8X" && buffer.length >= 30) return { width: 1 + buffer.readUIntLE(24, 3), height: 1 + buffer.readUIntLE(27, 3) };
+  if (kind === "VP8 " && buffer.length >= 30) return { width: buffer.readUInt16LE(26) & 0x3fff, height: buffer.readUInt16LE(28) & 0x3fff };
+  if (kind === "VP8L" && buffer.length >= 25) { const bits = buffer.readUInt32LE(21); return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 }; }
+  return null;
+}
+
+export function validateAssets(assetDir?: string): Pick<PetSnapshot, "valid" | "assetDir" | "lastError" | "message"> {
+  if (!assetDir) return { valid: false, lastError: "assetDir is required", message: "Pet disabled: configure assetDir." };
+  const manifest = join(assetDir, "pet.json"), sheet = join(assetDir, "spritesheet.webp");
+  if (!existsSync(manifest) || !existsSync(sheet)) return { valid: false, lastError: "missing required pet files", message: "Pet disabled: pet.json and spritesheet.webp are required." };
+  try { JSON.parse(readFileSync(manifest, "utf8")); } catch { return { valid: false, lastError: "invalid pet.json", message: "Pet disabled: pet.json is not valid JSON." }; }
+  const dimensions = webpDimensions(readFileSync(sheet));
+  if (!dimensions || dimensions.width !== 1536 || dimensions.height !== 1872) return { valid: false, lastError: "invalid sprite atlas dimensions", message: "Pet disabled: spritesheet.webp must be 1536×1872 WebP." };
+  return { valid: true, assetDir, message: "Pet is ready." };
+}
+
+export function createPetController(config: PetConfig = {}) {
+  let validation = validateAssets(config.assetDir);
+  let animation: Animation = "idle";
+  let changedAt = Date.now();
+  let activeRuns = 0;
+  let idleTimer: NodeJS.Timeout | undefined;
+  const set = (next: Animation) => { animation = next; changedAt = Date.now(); };
+  const scheduleIdle = () => { clearTimeout(idleTimer); idleTimer = setTimeout(() => set("idle"), config.idleDelayMs ?? 2500); };
+  return {
+    initialize: () => (validation = validateAssets(config.assetDir)),
+    snapshot: (): PetSnapshot => ({ ...validation, animation, changedAt, activeRuns, message: validation.valid ? `Pet is ${animation}.` : validation.message }),
+    statusText: () => { const s = validation.valid ? { ...validation, animation, activeRuns } : validation; return s.valid ? `Pet: ${animation}; active runs: ${activeRuns}.` : s.message; },
+    reset: () => { activeRuns = 0; clearTimeout(idleTimer); set("idle"); return { ...validation, animation, changedAt, activeRuns, message: "Pet reset to idle." }; },
+    modelStarted: () => { activeRuns += 1; clearTimeout(idleTimer); set("review"); },
+    toolStarted: () => { clearTimeout(idleTimer); set("running"); },
+    toolFinished: (failed: boolean) => { set(failed ? "failed" : "waiting"); if (!failed) scheduleIdle(); },
+    agentEnded: (failed: boolean) => { activeRuns = Math.max(0, activeRuns - 1); set(failed ? "failed" : "jumping"); scheduleIdle(); },
+  };
+}
