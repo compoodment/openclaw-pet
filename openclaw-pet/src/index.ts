@@ -30,6 +30,23 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
     api.on("after_tool_call", (event) => pet.toolFinished(Boolean(event.error)));
     api.on("agent_end", (event) => pet.agentEnded(event.success === false));
     api.on("gateway_start", async () => { await launchOverlay(process.env.TMPDIR ?? "/tmp"); });
+    api.agent.events.registerAgentEventSubscription({
+      id: "openclaw-pet-activity",
+      description: "Drive the desktop pet from sanitized agent lifecycle and tool events.",
+      streams: ["lifecycle", "tool", "error"],
+      handle: (event) => {
+        const phase = String(event.data.phase ?? event.data.status ?? event.data.type ?? "").toLowerCase();
+        if (event.stream === "tool") {
+          if (phase.includes("fail") || phase.includes("error")) pet.toolFinished(true);
+          else if (phase.includes("end") || phase.includes("result") || phase.includes("complete")) pet.toolFinished(false);
+          else pet.toolStarted();
+          return;
+        }
+        if (event.stream === "error") { pet.agentEnded(true); return; }
+        if (phase.includes("end") || phase.includes("complete") || phase.includes("finish")) pet.agentEnded(false);
+        else pet.modelStarted();
+      },
+    });
 
     api.registerCommand({
       name: "pet",
