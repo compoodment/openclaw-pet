@@ -15,7 +15,7 @@ export const ANIMATIONS = {
 
 export type Animation = keyof typeof ANIMATIONS;
 export type PetConfig = { assetDir?: string; enabled?: boolean; idleDelayMs?: number; scope?: "global"; overlay?: { enabled?: boolean; size?: number; corner?: "bottom-right" | "bottom-left" | "top-right" | "top-left" } };
-export type PetSnapshot = { valid: boolean; assetDir?: string; animation: Animation; changedAt: number; activeRuns: number; lastError?: string; message: string };
+export type PetSnapshot = { valid: boolean; assetDir?: string; animation: Animation; changedAt: number; activeRuns: number; activityCount: number; lastEvent: string; lastError?: string; message: string };
 
 function webpDimensions(buffer: Buffer): { width: number; height: number } | null {
   if (buffer.subarray(0, 4).toString() !== "RIFF" || buffer.subarray(8, 12).toString() !== "WEBP") return null;
@@ -41,17 +41,19 @@ export function createPetController(config: PetConfig = {}) {
   let animation: Animation = "idle";
   let changedAt = Date.now();
   let activeRuns = 0;
+  let activityCount = 0;
+  let lastEvent = "startup";
   let idleTimer: NodeJS.Timeout | undefined;
-  const set = (next: Animation) => { animation = next; changedAt = Date.now(); };
+  const set = (next: Animation, event = lastEvent) => { animation = next; changedAt = Date.now(); lastEvent = event; };
   const scheduleIdle = () => { clearTimeout(idleTimer); idleTimer = setTimeout(() => set("idle"), config.idleDelayMs ?? 2500); };
   return {
     initialize: () => (validation = validateAssets(config.assetDir)),
-    snapshot: (): PetSnapshot => ({ ...validation, animation, changedAt, activeRuns, message: validation.valid ? `Pet is ${animation}.` : validation.message }),
-    statusText: () => { const s = validation.valid ? { ...validation, animation, activeRuns } : validation; return s.valid ? `Pet: ${animation}; active runs: ${activeRuns}.` : s.message; },
-    reset: () => { activeRuns = 0; clearTimeout(idleTimer); set("idle"); return { ...validation, animation, changedAt, activeRuns, message: "Pet reset to idle." }; },
-    modelStarted: () => { activeRuns += 1; clearTimeout(idleTimer); set("review"); },
-    toolStarted: () => { clearTimeout(idleTimer); set("running"); },
-    toolFinished: (failed: boolean) => { set(failed ? "failed" : "waiting"); if (!failed) scheduleIdle(); },
-    agentEnded: (failed: boolean) => { activeRuns = Math.max(0, activeRuns - 1); set(failed ? "failed" : "jumping"); scheduleIdle(); },
+    snapshot: (): PetSnapshot => ({ ...validation, animation, changedAt, activeRuns, activityCount, lastEvent, message: validation.valid ? `Pet is ${animation}; last event: ${lastEvent}.` : validation.message }),
+    statusText: () => { const s = validation.valid ? { ...validation, animation, activeRuns, activityCount, lastEvent } : validation; return s.valid ? `Pet: ${animation}; last event: ${lastEvent}; activity count: ${activityCount}.` : s.message; },
+    reset: () => { activeRuns = 0; clearTimeout(idleTimer); set("idle", "manual-reset"); return { ...validation, animation, changedAt, activeRuns, activityCount, lastEvent, message: "Pet reset to idle." }; },
+    modelStarted: () => { activityCount += 1; activeRuns += 1; clearTimeout(idleTimer); set("review", "model-started"); },
+    toolStarted: () => { activityCount += 1; clearTimeout(idleTimer); set("running", "tool-started"); },
+    toolFinished: (failed: boolean) => { activityCount += 1; set(failed ? "failed" : "waiting", failed ? "tool-failed" : "tool-finished"); if (!failed) scheduleIdle(); },
+    agentEnded: (failed: boolean) => { activityCount += 1; activeRuns = Math.max(0, activeRuns - 1); set(failed ? "failed" : "jumping", failed ? "agent-failed" : "agent-finished"); scheduleIdle(); },
   };
 }
