@@ -57,6 +57,7 @@ export function createPetController(config: PetConfig = {}) {
     reset: () => { activeRuns = 0; clearTimeout(idleTimer); set("idle", "manual-reset", "Ready"); record("Reset to ready", "neutral"); return { ...validation, animation, changedAt, activeRuns, activityCount, lastEvent, activityLabel, activity, message: "Pet reset to idle." }; },
     modelStarted: () => { activityCount += 1; activeRuns += 1; clearTimeout(idleTimer); set("review", "model-started", "Thinking"); record("Model is thinking", "active"); },
     toolStarted: (toolName?: string) => { activityCount += 1; clearTimeout(idleTimer); const label = toolName ? `Running ${toolName}` : "Running tool"; set("running", "tool-started", label); record(label, "active"); },
+    progress: (label: string) => { activityCount += 1; clearTimeout(idleTimer); set("review", "progress", label); record(label, "active"); },
     toolFinished: (failed: boolean) => { activityCount += 1; const label = failed ? "Tool failed" : "Tool complete"; set(failed ? "failed" : "waiting", failed ? "tool-failed" : "tool-finished", label); record(label, failed ? "error" : "success"); if (!failed) scheduleIdle(); },
     agentEnded: (failed: boolean) => { activityCount += 1; activeRuns = Math.max(0, activeRuns - 1); const label = failed ? "Task failed" : "Task complete"; set(failed ? "failed" : "jumping", failed ? "agent-failed" : "agent-finished", label); record(label, failed ? "error" : "success"); scheduleIdle(); },
   };

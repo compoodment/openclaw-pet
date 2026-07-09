@@ -7,6 +7,13 @@ function safeToolName(data: Record<string, unknown>): string | undefined {
   return typeof value === "string" && /^[a-zA-Z0-9_:-]{1,48}$/.test(value) ? value : undefined;
 }
 
+function safeProgressLabel(data: Record<string, unknown>): string | undefined {
+  const value = data.title ?? data.text ?? data.status;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > 0 && normalized.length <= 140 ? normalized : undefined;
+}
+
 const plugin: OpenClawPluginDefinition = definePluginEntry({
   id: "openclaw-pet",
   name: "OpenClaw Pet",
@@ -38,9 +45,25 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
     api.agent.events.registerAgentEventSubscription({
       id: "openclaw-pet-activity",
       description: "Drive the desktop pet from sanitized agent lifecycle and tool events.",
-      streams: ["lifecycle", "tool", "error"],
+      streams: ["lifecycle", "tool", "error", "acp", "item", "command_output", "patch", "thinking"],
       handle: (event) => {
         const phase = String(event.data.phase ?? event.data.status ?? event.data.type ?? "").toLowerCase();
+        if (event.stream === "acp") {
+          const eventType = String(event.data.eventType ?? "").toLowerCase();
+          if (eventType === "tool_call") {
+            const detail = safeProgressLabel(event.data);
+            if (phase.includes("result") || phase.includes("complete")) pet.toolFinished(false);
+            else pet.toolStarted(safeToolName(event.data) ?? detail);
+            return;
+          }
+          if (eventType === "error") { pet.agentEnded(true); return; }
+          pet.progress(safeProgressLabel(event.data) ?? "Working");
+          return;
+        }
+        if (event.stream === "item" || event.stream === "thinking") {
+          pet.progress(safeProgressLabel(event.data) ?? "Working");
+          return;
+        }
         if (event.stream === "tool") {
           if (phase.includes("fail") || phase.includes("error")) pet.toolFinished(true);
           else if (phase.includes("end") || phase.includes("result") || phase.includes("complete")) pet.toolFinished(false);
