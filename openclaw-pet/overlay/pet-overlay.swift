@@ -11,6 +11,7 @@ guard CommandLine.arguments.count >= 4,
       let port = Int(CommandLine.arguments[1]),
       let size = Int(CommandLine.arguments[2]) else { exit(2) }
 let corner = CommandLine.arguments[3]
+let clickThrough = CommandLine.arguments.count >= 5 && CommandLine.arguments[4] == "true"
 let frame = NSScreen.main?.visibleFrame ?? .zero
 let edge: CGFloat = 20
 let x = corner.contains("left") ? frame.minX + edge : frame.maxX - CGFloat(size) - edge
@@ -19,7 +20,7 @@ let panelWidth = max(CGFloat(size), 300)
 let panelHeight = CGFloat(size) + 126
 let panel = NSPanel(contentRect: NSRect(x: x - (panelWidth - CGFloat(size)), y: y, width: panelWidth, height: panelHeight), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
 panel.level = NSWindow.Level.floating; panel.collectionBehavior = [NSWindow.CollectionBehavior.canJoinAllSpaces, NSWindow.CollectionBehavior.fullScreenAuxiliary, NSWindow.CollectionBehavior.stationary]
-panel.isOpaque = false; panel.backgroundColor = NSColor.clear; panel.hasShadow = false; panel.ignoresMouseEvents = false; panel.becomesKeyOnlyIfNeeded = true
+panel.isOpaque = false; panel.backgroundColor = NSColor.clear; panel.hasShadow = false; panel.ignoresMouseEvents = clickThrough; panel.becomesKeyOnlyIfNeeded = true
 let web = WKWebView(frame: panel.contentView!.bounds); web.setValue(false, forKey: "drawsBackground")
 let html = """
 <style>
@@ -37,9 +38,11 @@ function d(t){let a=r[s.animation]||r.idle;if(t>=n){f=(f+1)%a[1];n=t+a[2][f]}if(
 """
 web.loadHTMLString(html, baseURL: nil)
 panel.contentView?.addSubview(web)
-let dragSurface = DragSurface(frame: NSRect(x: panelWidth - CGFloat(size), y: 0, width: CGFloat(size), height: CGFloat(size - 38)))
-dragSurface.autoresizingMask = []
-dragSurface.wantsLayer = true
-dragSurface.layer?.backgroundColor = NSColor.clear.cgColor
-panel.contentView?.addSubview(dragSurface)
+if !clickThrough {
+  let dragSurface = DragSurface(frame: NSRect(x: panelWidth - CGFloat(size), y: 0, width: CGFloat(size), height: CGFloat(size - 38)))
+  dragSurface.autoresizingMask = []
+  dragSurface.wantsLayer = true
+  dragSurface.layer?.backgroundColor = NSColor.clear.cgColor
+  panel.contentView?.addSubview(dragSurface)
+}
 panel.orderFrontRegardless(); NSApplication.shared.setActivationPolicy(.accessory); NSApplication.shared.run()

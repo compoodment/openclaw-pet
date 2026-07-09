@@ -29,6 +29,7 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
         assetDir: state.assetDir!,
         size: config?.overlay?.size ?? 224,
         corner: config?.overlay?.corner ?? "bottom-right",
+        clickThrough: config?.overlay?.clickThrough ?? false,
         getSnapshot: () => pet.snapshot(),
         logger: api.logger,
       });
