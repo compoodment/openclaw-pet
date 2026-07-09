@@ -4,7 +4,7 @@ A native OpenClaw plugin that turns a user-supplied Codex-compatible pet atlas i
 
 ## Setup
 
-1. Put `pet.json` and a `1536×1872` `spritesheet.webp` in a directory you control.
+1. Put `pet.json` and a 1536-pixel-wide `spritesheet.webp` with 208-pixel animation rows in a directory you control.
 2. Install this plugin, then configure `plugins.entries.openclaw-pet.config.assetDir` to that absolute directory.
 3. Restart the Gateway. The overlay is local-only, stays above other apps, and never receives prompts, tool arguments, or outputs.
 

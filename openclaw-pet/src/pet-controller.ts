@@ -32,7 +32,7 @@ export function validateAssets(assetDir?: string): Pick<PetSnapshot, "valid" | "
   if (!existsSync(manifest) || !existsSync(sheet)) return { valid: false, lastError: "missing required pet files", message: "Pet disabled: pet.json and spritesheet.webp are required." };
   try { JSON.parse(readFileSync(manifest, "utf8")); } catch { return { valid: false, lastError: "invalid pet.json", message: "Pet disabled: pet.json is not valid JSON." }; }
   const dimensions = webpDimensions(readFileSync(sheet));
-  if (!dimensions || dimensions.width !== 1536 || dimensions.height !== 1872) return { valid: false, lastError: "invalid sprite atlas dimensions", message: "Pet disabled: spritesheet.webp must be 1536×1872 WebP." };
+  if (!dimensions || dimensions.width !== 1536 || dimensions.height < 1872 || dimensions.height % 208 !== 0) return { valid: false, lastError: "invalid sprite atlas dimensions", message: "Pet disabled: spritesheet.webp must be 1536 pixels wide with 208-pixel animation rows." };
   return { valid: true, assetDir, message: "Pet is ready." };
 }
 
