@@ -11,10 +11,15 @@
     "validate": "npm run build && npm test && npm run pack:check"
   },
   "files": [
-    "dist",
+    "dist/*.d.ts",
+    "dist/*.js",
+    "dist/pet-overlay-macos",
+    "dist/pet-overlay-win.exe",
     "openclaw.plugin.json",
     "README.md",
-    "overlay"
+    "overlay/pet-overlay.swift",
+    "overlay/windows/OpenClawPetOverlay.csproj",
+    "overlay/windows/Program.cs"
   ],
   "peerDependencies": {
     "openclaw": ">=2026.5.17"
