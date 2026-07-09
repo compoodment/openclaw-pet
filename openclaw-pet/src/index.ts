@@ -2,6 +2,11 @@ import { definePluginEntry, type OpenClawPluginDefinition } from "openclaw/plugi
 import { createPetController, type PetConfig } from "./pet-controller.js";
 import { startOverlay, stopOverlay } from "./overlay-service.js";
 
+function safeToolName(data: Record<string, unknown>): string | undefined {
+  const value = data.toolName ?? data.name;
+  return typeof value === "string" && /^[a-zA-Z0-9_:-]{1,48}$/.test(value) ? value : undefined;
+}
+
 const plugin: OpenClawPluginDefinition = definePluginEntry({
   id: "openclaw-pet",
   name: "OpenClaw Pet",
@@ -26,7 +31,7 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
     api.registerGatewayMethod("openclaw-pet.reset", async ({ respond }) => { await launchOverlay(process.env.TMPDIR ?? "/tmp"); respond(true, pet.reset()); }, { scope: "operator.write" });
 
     api.on("model_call_started", () => { void launchOverlay(process.env.TMPDIR ?? "/tmp"); pet.modelStarted(); });
-    api.on("before_tool_call", () => { void launchOverlay(process.env.TMPDIR ?? "/tmp"); pet.toolStarted(); });
+    api.on("before_tool_call", (event) => { void launchOverlay(process.env.TMPDIR ?? "/tmp"); pet.toolStarted(event.toolName); });
     api.on("after_tool_call", (event) => pet.toolFinished(Boolean(event.error)));
     api.on("agent_end", (event) => pet.agentEnded(event.success === false));
     api.on("gateway_start", async () => { await launchOverlay(process.env.TMPDIR ?? "/tmp"); });
@@ -39,7 +44,7 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
         if (event.stream === "tool") {
           if (phase.includes("fail") || phase.includes("error")) pet.toolFinished(true);
           else if (phase.includes("end") || phase.includes("result") || phase.includes("complete")) pet.toolFinished(false);
-          else pet.toolStarted();
+          else pet.toolStarted(safeToolName(event.data));
           return;
         }
         if (event.stream === "error") { pet.agentEnded(true); return; }
