@@ -8,6 +8,33 @@
     "additionalProperties": false,
     "properties": {
       "assetDir": { "type": "string", "description": "Absolute path containing pet.json and spritesheet.webp." },
+      "sources": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 16,
+        "description": "Pets rendered by this display host. Omit gateway for a local source; remote sources are pulled from the remote pet bridge.",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": { "type": "string", "pattern": "^[a-zA-Z0-9_-]{1,32}$" },
+            "label": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "assetDir": { "type": "string", "description": "Display-host-local path containing this pet's assets. Falls back to top-level assetDir and is never sent over the bridge." },
+            "gateway": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "url": { "type": "string", "pattern": "^https?://", "description": "Remote OpenClaw Pet bridge snapshot URL." },
+                "tokenEnv": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "Display-host environment variable containing the remote Gateway token." },
+                "pollIntervalMs": { "type": "integer", "minimum": 250, "maximum": 60000, "default": 1000 },
+                "timeoutMs": { "type": "integer", "minimum": 250, "maximum": 30000, "default": 5000 }
+              },
+              "required": ["url"]
+            }
+          },
+          "required": ["id"]
+        }
+      },
       "enabled": { "type": "boolean", "default": true },
       "idleDelayMs": { "type": "integer", "minimum": 250, "default": 2500 },
       "scope": { "type": "string", "enum": ["global"], "default": "global" },
@@ -21,8 +48,7 @@
           "clickThrough": { "type": "boolean", "default": false, "description": "Pass pointer input through the pet. Click-through pets cannot be dragged." }
         }
       }
-    },
-    "required": ["assetDir"]
+    }
   },
   "activation": {
     "onStartup": true

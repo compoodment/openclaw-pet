@@ -9,9 +9,11 @@ final class DragSurface: NSView {
 
 final class OverlayNavigationDelegate: NSObject, WKNavigationDelegate {
   private let port: Int
+  private let resize: (Int, Int) -> Void
 
-  init(port: Int) {
+  init(port: Int, resize: @escaping (Int, Int) -> Void) {
     self.port = port
+    self.resize = resize
   }
 
   func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
@@ -24,6 +26,16 @@ final class OverlayNavigationDelegate: NSObject, WKNavigationDelegate {
       NSApplication.shared.terminate(nil)
       return
     }
+    if url.scheme == "openclaw-pet" && url.host == "resize" {
+      decisionHandler(.cancel)
+      let values = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+      let size = values.first(where: { $0.name == "size" }).flatMap { Int($0.value ?? "") }
+      let count = values.first(where: { $0.name == "count" }).flatMap { Int($0.value ?? "") }
+      if let size, let count, (96...768).contains(size), (1...16).contains(count) {
+        resize(size, count)
+      }
+      return
+    }
     let isOverlayOrigin = url.scheme == "http" && url.host == "127.0.0.1" && url.port == port
     decisionHandler(isOverlayOrigin ? .allow : .cancel)
   }
@@ -31,30 +43,42 @@ final class OverlayNavigationDelegate: NSObject, WKNavigationDelegate {
 
 guard CommandLine.arguments.count >= 4,
       let port = Int(CommandLine.arguments[1]),
-      let size = Int(CommandLine.arguments[2]) else { exit(2) }
+      let size = Int(CommandLine.arguments[2]),
+      (96...768).contains(size) else { exit(2) }
 let corner = CommandLine.arguments[3]
 let clickThrough = CommandLine.arguments.count >= 5 && CommandLine.arguments[4] == "true"
+let sourceCount = CommandLine.arguments.count >= 6 ? max(1, min(16, Int(CommandLine.arguments[5]) ?? 1)) : 1
 let frame = NSScreen.main?.visibleFrame ?? .zero
 let edge: CGFloat = 20
-let x = corner.contains("left") ? frame.minX + edge : frame.maxX - CGFloat(size) - edge
-let y = corner.contains("top") ? frame.maxY - CGFloat(size) - edge : frame.minY + edge
-let panelWidth = max(CGFloat(size) + 96, 320)
+let activityWidth: CGFloat = 220
+let panelWidth = max(CGFloat(size * sourceCount) + activityWidth, 320)
 let panelHeight = max(CGFloat(size), 160)
-let panelX = corner.contains("left") ? x : x - (panelWidth - CGFloat(size))
+let panelX = corner.contains("left") ? frame.minX + edge : frame.maxX - panelWidth - edge
+let y = corner.contains("top") ? frame.maxY - panelHeight - edge : frame.minY + edge
 let panel = NSPanel(contentRect: NSRect(x: panelX, y: y, width: panelWidth, height: panelHeight), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
 panel.level = NSWindow.Level.floating; panel.collectionBehavior = [NSWindow.CollectionBehavior.canJoinAllSpaces, NSWindow.CollectionBehavior.fullScreenAuxiliary, NSWindow.CollectionBehavior.stationary]
 panel.isOpaque = false; panel.backgroundColor = NSColor.clear; panel.hasShadow = false; panel.ignoresMouseEvents = clickThrough; panel.becomesKeyOnlyIfNeeded = true
 let web = WKWebView(frame: panel.contentView!.bounds); web.setValue(false, forKey: "drawsBackground")
 web.autoresizingMask = [.width, .height]
-let navigationDelegate = OverlayNavigationDelegate(port: port)
+var dragSurface: DragSurface?
+let navigationDelegate = OverlayNavigationDelegate(port: port) { nextSize, nextCount in
+  let oldFrame = panel.frame
+  let nextWidth = max(CGFloat(nextSize * nextCount) + activityWidth, 320)
+  let nextHeight = max(CGFloat(nextSize), 160)
+  let nextX = corner.contains("left") ? oldFrame.minX : oldFrame.maxX - nextWidth
+  let nextY = corner.contains("top") ? oldFrame.maxY - nextHeight : oldFrame.minY
+  panel.setFrame(NSRect(x: nextX, y: nextY, width: nextWidth, height: nextHeight), display: true)
+  dragSurface?.frame = NSRect(x: nextWidth - CGFloat(nextSize * nextCount), y: 0, width: CGFloat(nextSize * nextCount), height: CGFloat(max(1, nextSize - 38)))
+}
 web.navigationDelegate = navigationDelegate
 web.load(URLRequest(url: URL(string: "http://127.0.0.1:\(port)/")!))
 panel.contentView?.addSubview(web)
 if !clickThrough {
-  let dragSurface = DragSurface(frame: NSRect(x: panelWidth - CGFloat(size), y: 0, width: CGFloat(size), height: CGFloat(size - 38)))
-  dragSurface.autoresizingMask = []
-  dragSurface.wantsLayer = true
-  dragSurface.layer?.backgroundColor = NSColor.clear.cgColor
-  panel.contentView?.addSubview(dragSurface)
+  let surface = DragSurface(frame: NSRect(x: panelWidth - CGFloat(size * sourceCount), y: 0, width: CGFloat(size * sourceCount), height: CGFloat(max(1, size - 38))))
+  surface.autoresizingMask = []
+  surface.wantsLayer = true
+  surface.layer?.backgroundColor = NSColor.clear.cgColor
+  panel.contentView?.addSubview(surface)
+  dragSurface = surface
 }
 panel.orderFrontRegardless(); NSApplication.shared.setActivationPolicy(.accessory); NSApplication.shared.run()

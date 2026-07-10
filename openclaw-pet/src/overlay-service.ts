@@ -4,7 +4,12 @@ import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ANIMATIONS, type ActivityItem, type Animation, type PetSnapshot } from "./pet-controller.js";
+import { ANIMATIONS } from "./pet-controller.js";
+import type { DisplaySnapshot, DisplaySourceAsset, DisplaySourceState } from "./source-coordinator.js";
+
+export const MIN_OVERLAY_SIZE = 96;
+export const MAX_OVERLAY_SIZE = 768;
+export const OVERLAY_ACTIVITY_WIDTH = 220;
 
 export type OverlayHelper = {
   executable: string;
@@ -15,11 +20,12 @@ export type OverlayCommand = OverlayHelper & { args: string[] };
 
 export type StartOverlayParams = {
   stateDir: string;
-  assetDir: string;
+  assets: DisplaySourceAsset[];
   size: number;
   corner: string;
   clickThrough?: boolean;
-  getSnapshot: () => PetSnapshot;
+  getSnapshot: () => DisplaySnapshot;
+  getSize?: () => number;
   logger: { warn: (message: string) => void };
 };
 
@@ -55,11 +61,12 @@ export type OverlayRuntime = {
   forceKillWaitMs: number;
 };
 
-type OverlayState = {
-  animation: Animation;
-  changedAt: number;
-  activityLabel: string;
-  activity: Array<Pick<ActivityItem, "id" | "label" | "tone">>;
+export type OverlayState = {
+  layout: {
+    petSize: number;
+    sourceCount: number;
+  };
+  sources: DisplaySourceState[];
 };
 
 type HelperExit = {
@@ -112,26 +119,48 @@ export function selectOverlayHelper(platform: NodeJS.Platform, distDir: string):
 export function buildOverlayCommand(
   platform: NodeJS.Platform,
   distDir: string,
-  params: Pick<StartOverlayParams, "size" | "corner" | "clickThrough"> & { port: number },
+  params: Pick<StartOverlayParams, "size" | "corner" | "clickThrough"> & { port: number; sourceCount: number },
 ): OverlayCommand | undefined {
   const helper = selectOverlayHelper(platform, distDir);
   if (!helper) return undefined;
   return {
     ...helper,
-    args: [String(params.port), String(params.size), params.corner, String(params.clickThrough ?? false)],
+    args: [String(params.port), String(params.size), params.corner, String(params.clickThrough ?? false), String(params.sourceCount)],
   };
 }
 
-export function toOverlayState(snapshot: PetSnapshot): OverlayState {
+export function normalizeOverlaySize(value: unknown): number | undefined {
+  const size = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value;
+  return typeof size === "number" && Number.isSafeInteger(size) && size >= MIN_OVERLAY_SIZE && size <= MAX_OVERLAY_SIZE
+    ? size
+    : undefined;
+}
+
+export function calculateOverlayDimensions(size: number, sourceCount: number): { width: number; height: number } {
   return {
-    animation: snapshot.animation,
-    changedAt: snapshot.changedAt,
-    activityLabel: snapshot.activityLabel,
-    activity: snapshot.activity.map(({ id, label, tone }) => ({ id, label, tone })),
+    width: Math.max(size * Math.max(1, sourceCount) + OVERLAY_ACTIVITY_WIDTH, 320),
+    height: Math.max(size, 160),
   };
 }
 
-function overlayHtml(size: number): string {
+export function toOverlayState(snapshot: DisplaySnapshot, petSize: number): OverlayState {
+  return {
+    layout: { petSize, sourceCount: snapshot.sources.length },
+    sources: snapshot.sources.map(({ id, label, available, state }) => ({
+      id,
+      label,
+      available,
+      state: {
+        animation: state.animation,
+        changedAt: state.changedAt,
+        activityLabel: state.activityLabel,
+        activity: state.activity.map(({ id: activityId, label: activityLabel, tone }) => ({ id: activityId, label: activityLabel, tone })),
+      },
+    })),
+  };
+}
+
+function overlayHtml(size: number, sourceCount: number): string {
   const animations = JSON.stringify(ANIMATIONS).replaceAll("<", "\\u003c");
   return `<!doctype html>
 <html>
@@ -139,56 +168,106 @@ function overlayHtml(size: number): string {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
+    :root{--pet-size:${size}px}
     html,body{width:100%;height:100%;margin:0;background:transparent;overflow:hidden;user-select:none;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-    #activity{box-sizing:border-box;position:absolute;left:8px;bottom:8px;width:calc(100% - ${size}px - 12px);padding:9px 10px;border-radius:11px;background:rgba(27,29,31,.94);color:#f5f5f5;box-shadow:0 2px 8px rgba(0,0,0,.26)}
+    #activity{box-sizing:border-box;position:absolute;left:8px;bottom:8px;width:204px;max-height:calc(100% - 16px);overflow:hidden;padding:9px 10px;border-radius:11px;background:rgba(27,29,31,.94);color:#f5f5f5;box-shadow:0 2px 8px rgba(0,0,0,.26)}
     #head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;font-weight:700;letter-spacing:.01em}
     button{border:0;background:transparent;color:#b9c5ff;font:inherit;padding:0;cursor:pointer}
     ul{list-style:none;margin:7px 0 0;padding:0;display:grid;gap:5px}
-    .item{display:flex;align-items:center;gap:6px;font-size:11px;line-height:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .item{display:grid;grid-template-columns:6px minmax(0,1fr);column-gap:6px;font-size:11px;line-height:14px}
+    .copy{min-width:0}.name{display:block;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.status{display:block;color:#d1d5db;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .dot{width:6px;height:6px;border-radius:50%;background:#9ca3af;flex:0 0 auto}
     .active .dot{background:#8ab4ff}.success .dot{background:#65d6a0}.error .dot{background:#f38b8b}
+    .unavailable .dot{background:#9ca3af}.unavailable .status{color:#a8adb5}
     .collapsed li:nth-child(n+3){display:none}
-    canvas{position:absolute;right:0;bottom:0;width:${size}px;height:${size}px;display:block;image-rendering:pixelated;pointer-events:none}
+    #pets{position:absolute;right:0;bottom:0;display:flex;align-items:flex-end}
+    .pet{position:relative;width:var(--pet-size);height:var(--pet-size);flex:0 0 auto}.pet.unavailable{opacity:.46}
+    canvas{width:100%;height:100%;display:block;image-rendering:pixelated;pointer-events:none}
   </style>
 </head>
 <body>
   <section id="activity" aria-live="polite">
-    <div id="head"><span id="status">Ready</span><button id="toggle" aria-expanded="true">Hide</button></div>
+    <div id="head"><span>OpenClaw pets</span><button id="toggle" aria-expanded="true">Hide</button></div>
     <ul id="events"></ul>
   </section>
-  <canvas></canvas>
+  <div id="pets"></div>
   <script>
     const animations=${animations};
-    const canvas=document.querySelector("canvas");
-    const context=canvas.getContext("2d");
-    const label=document.querySelector("#status");
     const events=document.querySelector("#events");
+    const pets=document.querySelector("#pets");
     const activityPanel=document.querySelector("#activity");
     const toggle=document.querySelector("#toggle");
-    const sheet=new Image();
-    sheet.src="/spritesheet.webp";
     const watchdogMs=10000;
-    let state={animation:"idle",activityLabel:"Ready",activity:[]};
-    let animation="idle",frame=0,nextFrameAt=0,width=0,height=0;
+    let state={layout:{petSize:${size},sourceCount:${Math.max(1, sourceCount)}},sources:[]};
+    let layoutKey="${size}:${Math.max(1, sourceCount)}";
     let lastStateAt=Date.now(),shutdownRequested=false;
     let collapsed=false;
+    const renderers=new Map();
     toggle.onclick=()=>{
       collapsed=!collapsed;
       activityPanel.classList.toggle("collapsed",collapsed);
       toggle.textContent=collapsed?"Show":"Hide";
       toggle.setAttribute("aria-expanded",String(!collapsed));
     };
-    function renderActivity(items){
-      events.replaceChildren(...(items||[]).map(item=>{
+    function toneFor(source){
+      if(!source.available)return "unavailable";
+      const item=source.state.activity&&source.state.activity[0];
+      return item?item.tone:"neutral";
+    }
+    function renderActivity(sources){
+      events.replaceChildren(...(sources||[]).map(source=>{
         const row=document.createElement("li");
-        row.className="item "+item.tone;
+        row.className="item "+toneFor(source);
         const dot=document.createElement("span");
         dot.className="dot";
-        const text=document.createElement("span");
-        text.textContent=item.label;
-        row.append(dot,text);
+        const copy=document.createElement("span");
+        copy.className="copy";
+        const name=document.createElement("span");
+        name.className="name";
+        name.textContent=source.label;
+        const status=document.createElement("span");
+        status.className="status";
+        status.textContent=source.available?(source.state.activityLabel||"Ready"):"Source unavailable";
+        copy.append(name,status);
+        row.append(dot,copy);
         return row;
       }));
+    }
+    function createRenderer(source){
+      const root=document.createElement("div");
+      root.className="pet";
+      root.dataset.sourceId=source.id;
+      const canvas=document.createElement("canvas");
+      root.append(canvas);
+      pets.append(root);
+      const sheet=new Image();
+      sheet.src="/assets/"+encodeURIComponent(source.id)+"/spritesheet.webp";
+      const renderer={root,canvas,context:canvas.getContext("2d"),sheet,source,animation:"idle",frame:0,nextFrameAt:0,width:0,height:0};
+      renderers.set(source.id,renderer);
+      return renderer;
+    }
+    function syncSources(sources){
+      const active=new Set();
+      for(const source of sources||[]){
+        active.add(source.id);
+        const renderer=renderers.get(source.id)||createRenderer(source);
+        renderer.source=source;
+        renderer.root.classList.toggle("unavailable",!source.available);
+      }
+      for(const [id,renderer] of renderers){
+        if(active.has(id))continue;
+        renderer.root.remove();
+        renderers.delete(id);
+      }
+    }
+    function applyLayout(layout){
+      const petSize=layout&&layout.petSize||${size};
+      const count=Math.max(1,layout&&layout.sourceCount||1);
+      document.documentElement.style.setProperty("--pet-size",petSize+"px");
+      const nextKey=petSize+":"+count;
+      if(nextKey===layoutKey)return;
+      layoutKey=nextKey;
+      location.href="openclaw-pet://resize?size="+encodeURIComponent(petSize)+"&count="+encodeURIComponent(count);
     }
     function checkWatchdog(){
       if(Date.now()-lastStateAt<watchdogMs||shutdownRequested)return;
@@ -200,24 +279,28 @@ function overlayHtml(size: number): string {
         const response=await fetch("/state",{cache:"no-store"});
         if(!response.ok) throw new Error("state unavailable");
         state=await response.json();
-        label.textContent=state.activityLabel||"Ready";
-        renderActivity(state.activity);
+        applyLayout(state.layout);
+        syncSources(state.sources);
+        renderActivity(state.sources);
         lastStateAt=Date.now();
       }catch{}
       if(shutdownRequested)return;
       setTimeout(poll,75);
     }
     function draw(time){
-      const next=animations[state.animation]||animations.idle;
-      if(animation!==state.animation){animation=state.animation;frame=0;nextFrameAt=time;}
-      if(time>=nextFrameAt){frame=(frame+1)%next.frames;nextFrameAt=time+next.durations[frame];}
-      if(sheet.complete&&sheet.naturalWidth){
-        const nextWidth=canvas.clientWidth,nextHeight=canvas.clientHeight;
-        if(width!==nextWidth||height!==nextHeight){width=canvas.width=nextWidth;height=canvas.height=nextHeight;}
-        context.clearRect(0,0,width,height);
-        context.imageSmoothingEnabled=false;
-        const scale=Math.min(width/192,height/208),petWidth=192*scale,petHeight=208*scale;
-        context.drawImage(sheet,frame*192,next.row*208,192,208,(width-petWidth)/2,(height-petHeight)/2,petWidth,petHeight);
+      for(const renderer of renderers.values()){
+        const animationName=renderer.source.state.animation;
+        const next=animations[animationName]||animations.idle;
+        if(renderer.animation!==animationName){renderer.animation=animationName;renderer.frame=0;renderer.nextFrameAt=time;}
+        if(time>=renderer.nextFrameAt){renderer.frame=(renderer.frame+1)%next.frames;renderer.nextFrameAt=time+next.durations[renderer.frame];}
+        if(renderer.sheet.complete&&renderer.sheet.naturalWidth){
+          const nextWidth=renderer.canvas.clientWidth,nextHeight=renderer.canvas.clientHeight;
+          if(renderer.width!==nextWidth||renderer.height!==nextHeight){renderer.width=renderer.canvas.width=nextWidth;renderer.height=renderer.canvas.height=nextHeight;}
+          renderer.context.clearRect(0,0,renderer.width,renderer.height);
+          renderer.context.imageSmoothingEnabled=false;
+          const scale=Math.min(renderer.width/192,renderer.height/208),petWidth=192*scale,petHeight=208*scale;
+          renderer.context.drawImage(renderer.sheet,renderer.frame*192,next.row*208,192,208,(renderer.width-petWidth)/2,(renderer.height-petHeight)/2,petWidth,petHeight);
+        }
       }
       requestAnimationFrame(draw);
     }
@@ -240,16 +323,22 @@ function requestHandler(params: StartOverlayParams): RequestListener {
         "content-security-policy": "default-src 'none'; connect-src 'self'; img-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
         "cache-control": "no-store",
       });
-      res.end(overlayHtml(params.size));
+      res.end(overlayHtml(params.size, params.assets.length));
       return;
     }
     if (path === "/state") {
       res.writeHead(200, { ...commonHeaders, "content-type": "application/json", "cache-control": "no-store" });
-      res.end(JSON.stringify(toOverlayState(params.getSnapshot())));
+      res.end(JSON.stringify(toOverlayState(params.getSnapshot(), params.getSize?.() ?? params.size)));
       return;
     }
-    if (path === "/spritesheet.webp") {
-      const file = join(params.assetDir, "spritesheet.webp");
+    const assetMatch = path?.match(/^\/assets\/([a-zA-Z0-9_-]{1,32})\/spritesheet\.webp$/);
+    if (assetMatch) {
+      const asset = params.assets.find((candidate) => candidate.id === assetMatch[1]);
+      if (!asset) {
+        res.writeHead(404, commonHeaders).end();
+        return;
+      }
+      const file = join(asset.assetDir, "spritesheet.webp");
       if (!existsSync(file)) {
         res.writeHead(404, commonHeaders).end();
         return;
@@ -450,7 +539,7 @@ export class OverlayService {
         return;
       }
 
-      const command = buildOverlayCommand(this.runtime.platform, this.runtime.distDir, { port, ...params });
+      const command = buildOverlayCommand(this.runtime.platform, this.runtime.distDir, { port, sourceCount: params.assets.length, ...params });
       if (!command) throw new Error(`unsupported platform ${this.runtime.platform}`);
       const child = this.runtime.spawnHelper(command.executable, command.args);
       active = this.createActiveHelper(child, localServer, params.logger);

@@ -4,33 +4,35 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildOverlayCommand,
+  calculateOverlayDimensions,
   createOverlayService,
+  normalizeOverlaySize,
   selectOverlayHelper,
   toOverlayState,
   type OverlayChildHandle,
   type OverlayServerHandle,
   type StartOverlayParams,
 } from "./overlay-service.js";
-import type { PetSnapshot } from "./pet-controller.js";
+import type { DisplaySnapshot } from "./source-coordinator.js";
 
-const snapshot: PetSnapshot = {
-  valid: true,
-  assetDir: "/private/pet-assets",
-  animation: "review",
-  changedAt: 1234,
-  activeRuns: 1,
-  activityCount: 2,
-  lastEvent: "must not cross the overlay protocol",
-  activityLabel: "Running safe-tool",
-  activity: [{ id: 7, label: "Running safe-tool", tone: "active", at: 1200 }],
-  lastError: "must not cross the overlay protocol",
-  message: "must not cross the overlay protocol",
+const snapshot: DisplaySnapshot = {
+  sources: [{
+    id: "local",
+    label: "Local",
+    available: true,
+    state: {
+      animation: "review",
+      changedAt: 1234,
+      activityLabel: "Running safe-tool",
+      activity: [{ id: 7, label: "Running safe-tool", tone: "active" }],
+    },
+  }],
 };
 
 function params(warn = vi.fn()): StartOverlayParams {
   return {
     stateDir: "/tmp/openclaw-pet",
-    assetDir: "/private/pet-assets",
+    assets: [{ id: "local", label: "Local", assetDir: "/private/pet-assets" }],
     size: 224,
     corner: "bottom-right",
     getSnapshot: () => snapshot,
@@ -173,9 +175,17 @@ describe("overlay platform selection", () => {
   });
 
   it("constructs the same helper arguments on both supported platforms", () => {
-    const options = { port: 43123, size: 256, corner: "top-left", clickThrough: true };
-    expect(buildOverlayCommand("darwin", "/plugin/dist", options)?.args).toEqual(["43123", "256", "top-left", "true"]);
-    expect(buildOverlayCommand("win32", "/plugin/dist", options)?.args).toEqual(["43123", "256", "top-left", "true"]);
+    const options = { port: 43123, size: 256, corner: "top-left", clickThrough: true, sourceCount: 3 };
+    expect(buildOverlayCommand("darwin", "/plugin/dist", options)?.args).toEqual(["43123", "256", "top-left", "true", "3"]);
+    expect(buildOverlayCommand("win32", "/plugin/dist", options)?.args).toEqual(["43123", "256", "top-left", "true", "3"]);
+  });
+
+  it("bounds runtime sizes and calculates a shared multi-pet frame", () => {
+    expect(normalizeOverlaySize("96")).toBe(96);
+    expect(normalizeOverlaySize(768)).toBe(768);
+    expect(normalizeOverlaySize(95)).toBeUndefined();
+    expect(normalizeOverlaySize("224px")).toBeUndefined();
+    expect(calculateOverlayDimensions(224, 3)).toEqual({ width: 892, height: 224 });
   });
 
   it("warns only once and starts nothing on unsupported platforms", async () => {
@@ -293,18 +303,30 @@ describe("overlay lifecycle", () => {
     expect(body).toContain("const watchdogMs=10000");
     expect(body).toContain("setInterval(checkWatchdog,250)");
     expect(body).toContain("openclaw-pet://watchdog-expired");
-    expect(body).toContain("renderActivity(state.activity)");
+    expect(body).toContain("renderActivity(state.sources)");
+    expect(body).toContain("openclaw-pet://resize?size=");
+    expect(body).toContain('sheet.src="/assets/"+encodeURIComponent(source.id)+"/spritesheet.webp"');
     await service.stop();
   });
 });
 
 describe("overlay privacy boundary", () => {
   it("exposes only renderer state", () => {
-    expect(toOverlayState(snapshot)).toEqual({
-      animation: "review",
-      changedAt: 1234,
-      activityLabel: "Running safe-tool",
-      activity: [{ id: 7, label: "Running safe-tool", tone: "active" }],
+    const state = toOverlayState(snapshot, 288);
+    expect(state).toEqual({
+      layout: { petSize: 288, sourceCount: 1 },
+      sources: [{
+        id: "local",
+        label: "Local",
+        available: true,
+        state: {
+          animation: "review",
+          changedAt: 1234,
+          activityLabel: "Running safe-tool",
+          activity: [{ id: 7, label: "Running safe-tool", tone: "active" }],
+        },
+      }],
     });
+    expect(JSON.stringify(state)).not.toContain("/private/pet-assets");
   });
 });
