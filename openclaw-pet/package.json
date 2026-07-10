@@ -6,15 +6,20 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && npm run build:overlay",
     "build:overlay": "node ./scripts/build-overlay.mjs",
-    "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
-    "plugin:validate": "npm run build && openclaw plugins validate --entry ./dist/index.js",
-    "test": "vitest run --config ./vitest.config.ts"
+    "test": "vitest run --config ./vitest.config.ts",
+    "pack:check": "npm pack --dry-run",
+    "validate": "npm run build && npm test && npm run pack:check"
   },
   "files": [
-    "dist",
+    "dist/*.d.ts",
+    "dist/*.js",
+    "dist/pet-overlay-macos",
+    "dist/pet-overlay-win.exe",
     "openclaw.plugin.json",
     "README.md",
-    "overlay"
+    "overlay/pet-overlay.swift",
+    "overlay/windows/OpenClawPetOverlay.csproj",
+    "overlay/windows/Program.cs"
   ],
   "peerDependencies": {
     "openclaw": ">=2026.5.17"
