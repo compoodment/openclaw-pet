@@ -26,7 +26,7 @@ export type StartOverlayParams = {
   clickThrough?: boolean;
   windowOffset?: { x: number; y: number };
   getSnapshot: () => DisplaySnapshot;
-  getSize?: () => number;
+  getSize?: (sourceId?: string) => number;
   logger: { warn: (message: string) => void };
 };
 
@@ -171,6 +171,11 @@ export function toOverlayState(snapshot: DisplaySnapshot, petSize: number): Over
       },
     })),
   };
+}
+
+function effectiveOverlaySize(params: Pick<StartOverlayParams, "assets" | "getSize" | "size">): number {
+  const sourceId = params.assets.length === 1 ? params.assets[0]?.id : undefined;
+  return params.getSize?.(sourceId) ?? params.assets[0]?.size ?? params.size;
 }
 
 function overlayHtml(size: number, sourceCount: number): string {
@@ -336,12 +341,12 @@ function requestHandler(params: StartOverlayParams): RequestListener {
         "content-security-policy": "default-src 'none'; connect-src 'self'; img-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
         "cache-control": "no-store",
       });
-      res.end(overlayHtml(params.size, params.assets.length));
+      res.end(overlayHtml(effectiveOverlaySize(params), params.assets.length));
       return;
     }
     if (path === "/state") {
       res.writeHead(200, { ...commonHeaders, "content-type": "application/json", "cache-control": "no-store" });
-      res.end(JSON.stringify(toOverlayState(params.getSnapshot(), params.getSize?.() ?? params.size)));
+      res.end(JSON.stringify(toOverlayState(params.getSnapshot(), effectiveOverlaySize(params))));
       return;
     }
     const assetMatch = path?.match(/^\/assets\/([a-zA-Z0-9_-]{1,32})\/spritesheet\.webp$/);
@@ -623,13 +628,17 @@ function overlayDisplayKey(params: StartOverlayParams): string {
   });
 }
 
-function offsetForSource(index: number, size: number, corner: string): { x: number; y: number } {
+function offsetForSource(index: number, sizes: number[], corner: string): { x: number; y: number } {
   if (index === 0) return { x: 0, y: 0 };
-  const step = calculateOverlayDimensions(size, 1).width + 24;
+  const step = sizes.slice(0, index).reduce((total, size) => total + calculateOverlayDimensions(size, 1).width + 24, 0);
   return {
-    x: corner.endsWith("left") ? index * step : -index * step,
+    x: corner.endsWith("left") ? step : -step,
     y: 0,
   };
+}
+
+function sourceSize(params: StartOverlayParams, asset: DisplaySourceAsset): number {
+  return params.getSize?.(asset.id) ?? asset.size ?? params.size;
 }
 
 function snapshotForSource(params: StartOverlayParams, sourceId: string): DisplaySnapshot {
@@ -642,14 +651,20 @@ export function createOverlayManager(createService: OverlayServiceFactory = crea
   let services: OverlayServiceInstance[] = [];
   let activeKey: string | undefined;
   let operation: Promise<void> = resolvedPromise;
-  const serviceParams = (params: StartOverlayParams, asset: DisplaySourceAsset, index: number): StartOverlayParams => params.assets.length === 1
-    ? params
-    : {
+  const serviceParams = (params: StartOverlayParams, asset: DisplaySourceAsset, index: number, sizes: number[]): StartOverlayParams => {
+    const size = sizes[index] ?? sourceSize(params, asset);
+    const getSize = (sourceId?: string) => params.getSize?.(sourceId ?? asset.id) ?? asset.size ?? params.size;
+    return params.assets.length === 1
+      ? { ...params, size, getSize }
+      : {
         ...params,
         assets: [asset],
-        windowOffset: offsetForSource(index, params.size, params.corner),
+        size,
+        windowOffset: offsetForSource(index, sizes, params.corner),
         getSnapshot: () => snapshotForSource(params, asset.id),
+        getSize,
       };
+  };
   const stopCurrent = async (): Promise<void> => {
     const current = services;
     services = [];
@@ -665,16 +680,17 @@ export function createOverlayManager(createService: OverlayServiceFactory = crea
     async start(params: StartOverlayParams): Promise<void> {
       await enqueue(async () => {
         const nextKey = overlayDisplayKey(params);
+        const sizes = params.assets.map((asset) => sourceSize(params, asset));
         if (activeKey === nextKey && services.length === params.assets.length) {
           if (services.every((service) => service.isActive())) return;
-          await Promise.all(params.assets.map((asset, index) => services[index]!.start(serviceParams(params, asset, index))));
+          await Promise.all(params.assets.map((asset, index) => services[index]!.start(serviceParams(params, asset, index, sizes))));
           return;
         }
         await stopCurrent();
         activeKey = nextKey;
         const pending = params.assets.map((asset, index) => {
           const service = createService();
-          return { service, params: serviceParams(params, asset, index) };
+          return { service, params: serviceParams(params, asset, index, sizes) };
         });
         services = pending.map(({ service }) => service);
         await Promise.all(pending.map(({ service, params: serviceParams }) => service.start(serviceParams)));

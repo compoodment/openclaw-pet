@@ -10,6 +10,7 @@ export type DisplaySourceAsset = {
   id: string;
   label: string;
   assetDir: string;
+  size?: number;
 };
 
 export type DisplaySourceState = {
@@ -71,6 +72,12 @@ function normalizeSourceLabel(value: string | undefined, fallback: string): stri
   return normalized.length > 0 && normalized.length <= 64 ? normalized : fallback;
 }
 
+function normalizeSourceSize(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 96 && value <= 768
+    ? value
+    : undefined;
+}
+
 export function resolvePetSources(config: PetConfig): ResolvedSource[] {
   const configured = config.sources?.length
     ? config.sources
@@ -82,12 +89,14 @@ export function resolvePetSources(config: PetConfig): ResolvedSource[] {
   for (const source of configured) {
     const id = normalizeSourceId(source.id);
     const assetDir = source.assetDir ?? config.assetDir;
+    const size = normalizeSourceSize(source.size);
     if (!id || seen.has(id) || typeof assetDir !== "string" || assetDir.length === 0) continue;
     seen.add(id);
     result.push({
       id,
       label: normalizeSourceLabel(source.label, id),
       assetDir,
+      ...(size ? { size } : {}),
       ...(source.gateway ? { gateway: source.gateway } : {}),
     });
   }
@@ -167,7 +176,12 @@ export class SourceCoordinator {
   }
 
   assets(): DisplaySourceAsset[] {
-    return this.displaySources.map(({ id, label, assetDir }) => ({ id, label, assetDir }));
+    return this.displaySources.map(({ id, label, assetDir, size }) => ({
+      id,
+      label,
+      assetDir,
+      ...(size ? { size } : {}),
+    }));
   }
 
   snapshot(): DisplaySnapshot {

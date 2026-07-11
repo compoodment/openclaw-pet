@@ -232,8 +232,8 @@ describe("overlay lifecycle", () => {
     await manager.start({
       ...params(),
       assets: [
-        { id: "local", label: "Local", assetDir: "/assets/local" },
-        { id: "remote", label: "Remote", assetDir: "/assets/remote" },
+        { id: "local", label: "Local", assetDir: "/assets/local", size: 320 },
+        { id: "remote", label: "Remote", assetDir: "/assets/remote", size: 224 },
       ],
       size: 224,
       corner: "bottom-right",
@@ -241,11 +241,15 @@ describe("overlay lifecycle", () => {
     });
 
     expect(started).toHaveLength(2);
-    expect(started[0]?.assets).toEqual([{ id: "local", label: "Local", assetDir: "/assets/local" }]);
+    expect(started[0]?.assets).toEqual([{ id: "local", label: "Local", assetDir: "/assets/local", size: 320 }]);
+    expect(started[0]?.size).toBe(320);
+    expect(started[0]?.getSize?.()).toBe(320);
     expect(started[0]?.windowOffset).toEqual({ x: 0, y: 0 });
     expect(started[0]?.getSnapshot().sources.map((source) => source.id)).toEqual(["local"]);
-    expect(started[1]?.assets).toEqual([{ id: "remote", label: "Remote", assetDir: "/assets/remote" }]);
-    expect(started[1]?.windowOffset).toEqual({ x: -468, y: 0 });
+    expect(started[1]?.assets).toEqual([{ id: "remote", label: "Remote", assetDir: "/assets/remote", size: 224 }]);
+    expect(started[1]?.size).toBe(224);
+    expect(started[1]?.getSize?.()).toBe(224);
+    expect(started[1]?.windowOffset).toEqual({ x: -564, y: 0 });
     expect(started[1]?.getSnapshot().sources.map((source) => source.id)).toEqual(["remote"]);
 
     await manager.stop();
@@ -274,6 +278,37 @@ describe("overlay lifecycle", () => {
     await manager.start({ ...baseParams, size: 288 });
 
     expect(started).toHaveLength(2);
+    expect(stopCount).toBe(0);
+    await manager.stop();
+  });
+
+  it("does not restart helper windows for source-specific runtime size changes", async () => {
+    const started: StartOverlayParams[] = [];
+    let stopCount = 0;
+    const runtimeSizes = new Map([["local", 224], ["remote", 224]]);
+    const manager = createOverlayManager(() => ({
+      isActive: () => true,
+      start: async (startParams) => { started.push(startParams); },
+      stop: async () => { stopCount += 1; },
+    }));
+    const baseParams: StartOverlayParams = {
+      ...params(),
+      assets: [
+        { id: "local", label: "Local", assetDir: "/assets/local" },
+        { id: "remote", label: "Remote", assetDir: "/assets/remote" },
+      ],
+      corner: "bottom-right",
+      getSnapshot: () => remoteSnapshot,
+      getSize: (sourceId) => runtimeSizes.get(sourceId ?? "local") ?? 224,
+    };
+
+    await manager.start(baseParams);
+    runtimeSizes.set("remote", 320);
+    await manager.start(baseParams);
+
+    expect(started).toHaveLength(2);
+    expect(started[0]?.getSize?.()).toBe(224);
+    expect(started[1]?.getSize?.()).toBe(320);
     expect(stopCount).toBe(0);
     await manager.stop();
   });

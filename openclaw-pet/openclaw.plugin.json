@@ -20,6 +20,7 @@
             "id": { "type": "string", "pattern": "^[a-zA-Z0-9_-]{1,32}$" },
             "label": { "type": "string", "minLength": 1, "maxLength": 64 },
             "assetDir": { "type": "string", "description": "Display-host-local path containing this pet's assets. Falls back to top-level assetDir and is never sent over the bridge." },
+            "size": { "type": "integer", "minimum": 96, "maximum": 768, "description": "Optional startup size for this source on the display host." },
             "gateway": {
               "type": "object",
               "additionalProperties": false,

@@ -18,6 +18,7 @@ export type PetSourceConfig = {
   id: string;
   label?: string;
   assetDir?: string;
+  size?: number;
   gateway?: {
     url: string;
     tokenEnv?: string;

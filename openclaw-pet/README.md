@@ -25,7 +25,7 @@ Both native helpers load the same renderer from the loopback server. If that ren
    ```
 
 3. Install the local package with `openclaw plugins install .`, then configure `plugins.entries.openclaw-pet.config`.
-4. Restart the Gateway. Use `/pet` for status, `/pet reset` to return the local pet to idle, and `/pet resize 288` to resize all pets at runtime.
+4. Restart the Gateway. Use `/pet` for status, `/pet reset` to return the local pet to idle, `/pet resize 288` to resize all pets, and `/pet resize server 320` to resize one source at runtime.
 
 Example plugin config (use escaped backslashes in JSON on Windows):
 
@@ -59,6 +59,7 @@ Configure `sources` on the machine that owns the desktop display. A source witho
       "id": "server",
       "label": "Build server",
       "assetDir": "/Users/you/pets/server",
+      "size": 288,
       "gateway": {
         "url": "https://openclaw.example.test/api/openclaw-pet/v1/snapshot",
         "tokenEnv": "OPENCLAW_BUILD_SERVER_TOKEN",
@@ -84,13 +85,19 @@ Each configured source is rendered in its own native helper window. Multiple pet
 
 ## Runtime sizing
 
-`overlay.size` sets the startup size from 96 through 768 pixels. On a display host, change it without restarting through the write-scoped Gateway method:
+`overlay.size` sets the startup size from 96 through 768 pixels. A source can set its own startup size with `sources[].size`. On a display host, change every current source without restarting through the write-scoped Gateway method:
 
 ```bash
 openclaw gateway call openclaw-pet.resize --params '{"size":288}'
 ```
 
-The equivalent chat command is `/pet resize 288`. Runtime sizing is intentionally not part of `openclaw-pet.bridge.snapshot`; a source Gateway cannot change a display host's layout through the bridge. Runtime changes are in-memory and the configured `overlay.size` is used again after restart.
+Resize one display source with `sourceId`:
+
+```bash
+openclaw gateway call openclaw-pet.resize --params '{"sourceId":"server","size":320}'
+```
+
+The equivalent chat commands are `/pet resize 288` and `/pet resize server 320`. Runtime sizing is intentionally not part of `openclaw-pet.bridge.snapshot`; a source Gateway cannot change a display host's layout through the bridge. Runtime changes are in-memory and the configured `overlay.size` / `sources[].size` values are used again after restart.
 
 `overlay.clickThrough` is optional and defaults to `false`, preserving draggable pet windows. Set it to `true` to pass pointer input to windows underneath the pets; click-through pets cannot be dragged, so change the corner in config and restart the Gateway to reposition them.
 

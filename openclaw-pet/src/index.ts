@@ -2,7 +2,7 @@ import { definePluginEntry, type OpenClawPluginDefinition } from "openclaw/plugi
 import { toBridgeSnapshot } from "./bridge.js";
 import { createPetController, type PetConfig } from "./pet-controller.js";
 import { normalizeOverlaySize, startOverlay, stopOverlay } from "./overlay-service.js";
-import { BRIDGE_SNAPSHOT_METHOD, SourceCoordinator } from "./source-coordinator.js";
+import { BRIDGE_SNAPSHOT_METHOD, SourceCoordinator, type DisplaySourceAsset } from "./source-coordinator.js";
 
 function safeToolName(data: Record<string, unknown>): string | undefined {
   const value = data.toolName ?? data.name;
@@ -26,11 +26,26 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
     const pet = createPetController({ ...config, assetDir: controllerAssetDir });
     const sources = new SourceCoordinator({ config, getLocalSnapshot: () => pet.snapshot(), logger: api.logger });
     let overlaySize = normalizeOverlaySize(config?.overlay?.size) ?? 224;
+    const sourceSizes = new Map<string, number>();
     let overlayStateDir = process.env.TMPDIR ?? "/tmp";
+    const getSourceSize = (sourceId?: string): number => {
+      if (!sourceId) return overlaySize;
+      const source = sources.assets().find((candidate) => candidate.id === sourceId);
+      return sourceSizes.get(sourceId) ?? source?.size ?? overlaySize;
+    };
+    const displayAssets = (): DisplaySourceAsset[] => sources.assets().map((source) => ({
+      ...source,
+      size: getSourceSize(source.id),
+    }));
+    const sourceSizeStatus = () => sources.assets().map((source) => ({
+      id: source.id,
+      size: getSourceSize(source.id),
+      customSize: sourceSizes.has(source.id),
+    }));
     const launchOverlay = async (stateDir: string) => {
       overlayStateDir = stateDir;
       if (config?.enabled === false || config?.overlay?.enabled === false) return;
-      const assets = sources.assets();
+      const assets = displayAssets();
       if (assets.length === 0) return;
       sources.start();
       await startOverlay({
@@ -40,7 +55,7 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
         corner: config?.overlay?.corner ?? "bottom-right",
         clickThrough: config?.overlay?.clickThrough ?? false,
         getSnapshot: () => sources.snapshot(),
-        getSize: () => overlaySize,
+        getSize: getSourceSize,
         logger: api.logger,
       });
     };
@@ -48,17 +63,34 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
     const displayStatus = () => ({
       enabled: config?.enabled !== false && config?.overlay?.enabled !== false && sources.assets().length > 0,
       size: overlaySize,
-      sources: sources.snapshot().sources.map(({ id, label, available }) => ({ id, label, available })),
+      sources: sources.snapshot().sources.map(({ id, label, available }) => ({
+        id,
+        label,
+        available,
+        size: getSourceSize(id),
+        customSize: sourceSizes.has(id),
+      })),
     });
-    const resize = async (value: unknown): Promise<{ ok: true; size: number } | { ok: false; message: string }> => {
-      if (config?.enabled === false || config?.overlay?.enabled === false || sources.assets().length === 0) {
+    const resize = async (
+      value: unknown,
+      sourceId?: string,
+    ): Promise<{ ok: true; size: number; sourceId?: string; sourceCount: number; sources: ReturnType<typeof sourceSizeStatus> } | { ok: false; message: string }> => {
+      const assets = sources.assets();
+      if (config?.enabled === false || config?.overlay?.enabled === false || assets.length === 0) {
         return { ok: false, message: "This host is not configured as an OpenClaw Pet display." };
       }
       const size = normalizeOverlaySize(value);
       if (!size) return { ok: false, message: "size must be an integer from 96 through 768." };
-      overlaySize = size;
+      if (sourceId) {
+        const source = assets.find((candidate) => candidate.id === sourceId);
+        if (!source) return { ok: false, message: `Unknown pet source "${sourceId}".` };
+        sourceSizes.set(source.id, size);
+      } else {
+        overlaySize = size;
+        for (const source of assets) sourceSizes.set(source.id, size);
+      }
       await launchOverlay(overlayStateDir);
-      return { ok: true, size };
+      return { ok: true, size, ...(sourceId ? { sourceId } : {}), sourceCount: assets.length, sources: sourceSizeStatus() };
     };
 
     api.registerGatewayMethod(BRIDGE_SNAPSHOT_METHOD, ({ respond }) => {
@@ -93,12 +125,18 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
       respond(true, pet.reset());
     }, { scope: "operator.write" });
     api.registerGatewayMethod("openclaw-pet.resize", async ({ params, respond }) => {
-      const result = await resize(params.size);
+      const options = params && typeof params === "object" ? params as Record<string, unknown> : {};
+      const sourceId = typeof options.sourceId === "string"
+        ? options.sourceId
+        : typeof options.source === "string"
+          ? options.source
+          : undefined;
+      const result = await resize(options.size, sourceId);
       if (!result.ok) {
         respond(false, undefined, { code: "INVALID_REQUEST", message: result.message });
         return;
       }
-      respond(true, { size: result.size, sourceCount: sources.assets().length });
+      respond(true, result);
     }, { scope: "operator.write" });
 
     api.on("model_call_started", () => { void launchOverlay(process.env.TMPDIR ?? "/tmp"); pet.modelStarted(); });
@@ -148,12 +186,19 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
         await launchOverlay(overlayStateDir);
         const args = ctx.args?.trim() ?? "";
         if (args === "reset") return { text: pet.reset().message };
+        const sourceResizeMatch = args.match(/^resize\s+([a-zA-Z0-9_-]{1,32})\s+(\d+)$/);
+        if (sourceResizeMatch) {
+          const result = await resize(sourceResizeMatch[2], sourceResizeMatch[1]);
+          return { text: result.ok ? `Pet source ${result.sourceId} resized to ${result.size}px.` : `Pet resize failed: ${result.message}` };
+        }
         const resizeMatch = args.match(/^resize\s+(\d+)$/);
         if (resizeMatch) {
           const result = await resize(resizeMatch[1]);
-          return { text: result.ok ? `Pet display resized to ${result.size}px.` : `Pet resize failed: ${result.message}` };
+          return { text: result.ok ? `All pet displays resized to ${result.size}px.` : `Pet resize failed: ${result.message}` };
         }
-        return { text: `${pet.statusText()} Display: ${overlaySize}px; ${sources.assets().length} source(s).` };
+        const display = displayStatus();
+        const sourceSummary = display.sources.map((source) => `${source.label} ${source.size}px`).join(", ");
+        return { text: `${pet.statusText()} Display: ${sourceSummary || `${overlaySize}px`}; ${sources.assets().length} source(s).` };
       },
     });
 

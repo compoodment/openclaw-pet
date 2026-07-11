@@ -45,13 +45,26 @@ describe("pet source configuration", () => {
   it("allows source asset paths to inherit from the display host", () => {
     expect(resolvePetSources({
       assetDir: "/assets/shared",
-      sources: [{ id: "remote", gateway: { url: "https://gateway.example.test/snapshot" } }],
+      sources: [{ id: "remote", size: 320, gateway: { url: "https://gateway.example.test/snapshot" } }],
     })).toEqual([{
       id: "remote",
       label: "remote",
       assetDir: "/assets/shared",
+      size: 320,
       gateway: { url: "https://gateway.example.test/snapshot" },
     }]);
+  });
+
+  it("keeps invalid source sizes from becoming display layout state", () => {
+    expect(resolvePetSources({
+      sources: [
+        { id: "tiny", assetDir: "/assets/tiny", size: 95 },
+        { id: "valid", assetDir: "/assets/valid", size: 96 },
+      ],
+    })).toEqual([
+      { id: "tiny", label: "tiny", assetDir: "/assets/tiny" },
+      { id: "valid", label: "valid", assetDir: "/assets/valid", size: 96 },
+    ]);
   });
 
   it("drops invalid and duplicate source ids", () => {
