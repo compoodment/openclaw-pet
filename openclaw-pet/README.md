@@ -4,9 +4,9 @@ A native OpenClaw plugin that turns user-supplied Codex-compatible pet atlases i
 
 ## Privacy
 
-The plugin reduces OpenClaw lifecycle events to display-only pet state in the platform-neutral controller. Its versioned Gateway bridge exposes only an allowlisted `{ animation, changedAt, activityLabel, activity }` snapshot. Activity labels are generated from lifecycle phases and validated tool names; prompts, tool arguments, tool results, model output, credentials, asset paths, and controller errors never enter a bridge snapshot.
+The plugin reduces OpenClaw lifecycle events to display-only pet state in the platform-neutral controller. Its versioned Gateway bridge exposes only an allowlisted `{ animation, changedAt, activityLabel, activity }` snapshot. Activity labels are generated from fixed lifecycle phases and validated tool names; prompts, tool arguments, tool results, model output, arbitrary event titles/statuses, credentials, asset paths, and controller errors never enter a bridge snapshot.
 
-Remote sources are pull-only: the display host periodically fetches the remote plugin's gateway-authenticated `/api/openclaw-pet/v1/snapshot` bridge endpoint and validates the complete response against the strict bridge contract. A response containing unknown fields is rejected. Gateway credentials are resolved from the display host's environment and used only for Gateway authentication.
+Remote sources are pull-only: the display host periodically fetches the remote plugin's gateway-authenticated `/api/openclaw-pet/v1/snapshot` bridge endpoint and validates the complete response against the strict bridge contract. A response containing unknown fields is rejected. Gateway credentials are resolved from the display host's environment and used only for Gateway authentication. Token-authenticated remote sources must use HTTPS; loopback HTTP is accepted only for local development and SSH tunnels.
 
 The native overlay receives source IDs, display labels, availability, sanitized pet state, layout, and locally hosted sprite sheets over an ephemeral HTTP server bound to `127.0.0.1`. Every source's `assetDir` is a display-host-local setting and never appears in either the Gateway bridge or renderer state JSON.
 
@@ -24,7 +24,7 @@ Both native helpers load the same renderer from the loopback server. If that ren
    npm run build
    ```
 
-3. Install the local package with `openclaw plugins install .`, then configure `plugins.entries.openclaw-pet.config`.
+3. Install the local package with `openclaw plugins install .`, then enable conversation access for the plugin and configure `plugins.entries.openclaw-pet.config`.
 4. Restart the Gateway. Use `/pet` for status, `/pet reset` to return the local pet to idle, `/pet resize 288` to resize all pets, and `/pet resize server 320` to resize one source at runtime.
 
 Example plugin config (use escaped backslashes in JSON on Windows):
@@ -41,7 +41,31 @@ Example plugin config (use escaped backslashes in JSON on Windows):
 }
 ```
 
-The legacy `assetDir` form remains supported and creates one source named `local`.
+Example plugin entry:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "openclaw-pet": {
+        "enabled": true,
+        "hooks": {
+          "allowConversationAccess": true
+        },
+        "config": {
+          "assetDir": "C:\\Users\\you\\openclaw-pet-assets",
+          "overlay": {
+            "enabled": true,
+            "size": 224
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`hooks.allowConversationAccess` lets OpenClaw deliver the lifecycle events needed for completion/failure states. The legacy `assetDir` form remains supported and creates one source named `local`.
 
 ## Multiple local and remote sources
 
@@ -77,7 +101,9 @@ Configure `sources` on the machine that owns the desktop display. A source witho
 }
 ```
 
-Install and enable the plugin on each remote source Gateway. A source-only host can set `overlay.enabled` to `false` and does not need local pet assets; lifecycle events still drive its sanitized bridge snapshot. Put the token itself only in the display host environment variable named by `tokenEnv`.
+Install and enable the plugin on each remote source Gateway. A source-only host can set `overlay.enabled` to `false` and does not need local pet assets; lifecycle events still drive its sanitized bridge snapshot. Put the token itself only in the display host environment variable named by `tokenEnv`. Token-authenticated bridge URLs must be `https://` unless they are loopback `http://` URLs used for local development or SSH tunnels.
+
+Every display source needs display-host-local assets, either through source-level `assetDir` or top-level `assetDir`. Invalid source IDs, missing asset paths, invalid display assets, and unsafe token transports are skipped with a startup warning.
 
 The display retains the last validated remote animation data but visibly marks a source unavailable whenever polling fails or returns a non-conforming snapshot. Polling never overlaps for a given source: the next poll is scheduled after the previous request finishes.
 
@@ -97,7 +123,7 @@ Resize one display source with `sourceId`:
 openclaw gateway call openclaw-pet.resize --params '{"sourceId":"server","size":320}'
 ```
 
-The equivalent chat commands are `/pet resize 288` and `/pet resize server 320`. Runtime sizing is intentionally not part of `openclaw-pet.bridge.snapshot`; a source Gateway cannot change a display host's layout through the bridge. Runtime changes are in-memory and the configured `overlay.size` / `sources[].size` values are used again after restart.
+The equivalent chat commands are `/pet resize 288` and `/pet resize server 320`. Runtime resizing also recomputes the initial stagger offsets so pets do not overlap after a size change; if you manually dragged a pet, a later resize may move it back near the configured corner. Runtime sizing is intentionally not part of `openclaw-pet.bridge.snapshot`; a source Gateway cannot change a display host's layout through the bridge. Runtime changes are in-memory and the configured `overlay.size` / `sources[].size` values are used again after restart.
 
 `overlay.clickThrough` is optional and defaults to `false`, preserving draggable pet windows. Set it to `true` to pass pointer input to windows underneath the pets; click-through pets cannot be dragged, so change the corner in config and restart the Gateway to reposition them.
 

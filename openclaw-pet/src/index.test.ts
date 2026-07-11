@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ANIMATIONS, createPetController, validateAssets } from "./pet-controller.js";
 
 describe("pet animation contract", () => {
@@ -12,12 +12,22 @@ describe("pet animation contract", () => {
     expect(validateAssets()).toMatchObject({ valid: false, lastError: "assetDir is required" });
   });
 
-  it("keeps overlapping runs non-negative and resets to idle", () => {
+  it("keeps overlapping runs active until all runs complete", () => {
+    vi.useFakeTimers();
     const pet = createPetController({ idleDelayMs: 1 });
-    pet.modelStarted(); pet.modelStarted();
-    expect(pet.snapshot()).toMatchObject({ animation: "review", activeRuns: 2 });
-    pet.agentEnded(false); pet.agentEnded(true); pet.agentEnded(false);
-    expect(pet.snapshot()).toMatchObject({ animation: "jumping", activeRuns: 0 });
-    expect(pet.reset()).toMatchObject({ animation: "idle", activeRuns: 0 });
+    try {
+      pet.modelStarted(); pet.modelStarted();
+      expect(pet.snapshot()).toMatchObject({ animation: "review", activeRuns: 2 });
+      pet.agentEnded(false);
+      vi.advanceTimersByTime(5);
+      expect(pet.snapshot()).toMatchObject({ animation: "review", activeRuns: 1, activityLabel: "Thinking" });
+      pet.agentEnded(false);
+      expect(pet.snapshot()).toMatchObject({ animation: "jumping", activeRuns: 0 });
+      vi.advanceTimersByTime(1);
+      expect(pet.snapshot()).toMatchObject({ animation: "idle", activeRuns: 0 });
+      expect(pet.reset()).toMatchObject({ animation: "idle", activeRuns: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

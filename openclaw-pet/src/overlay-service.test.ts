@@ -244,11 +244,13 @@ describe("overlay lifecycle", () => {
     expect(started[0]?.assets).toEqual([{ id: "local", label: "Local", assetDir: "/assets/local", size: 320 }]);
     expect(started[0]?.size).toBe(320);
     expect(started[0]?.getSize?.()).toBe(320);
+    expect(started[0]?.getWindowOffset?.()).toEqual({ x: 0, y: 0 });
     expect(started[0]?.windowOffset).toEqual({ x: 0, y: 0 });
     expect(started[0]?.getSnapshot().sources.map((source) => source.id)).toEqual(["local"]);
     expect(started[1]?.assets).toEqual([{ id: "remote", label: "Remote", assetDir: "/assets/remote", size: 224 }]);
     expect(started[1]?.size).toBe(224);
     expect(started[1]?.getSize?.()).toBe(224);
+    expect(started[1]?.getWindowOffset?.()).toEqual({ x: -564, y: 0 });
     expect(started[1]?.windowOffset).toEqual({ x: -564, y: 0 });
     expect(started[1]?.getSnapshot().sources.map((source) => source.id)).toEqual(["remote"]);
 
@@ -309,6 +311,37 @@ describe("overlay lifecycle", () => {
     expect(started).toHaveLength(2);
     expect(started[0]?.getSize?.()).toBe(224);
     expect(started[1]?.getSize?.()).toBe(320);
+    expect(stopCount).toBe(0);
+    await manager.stop();
+  });
+
+  it("updates live helper offsets when runtime sizes change", async () => {
+    const started: StartOverlayParams[] = [];
+    let stopCount = 0;
+    const runtimeSizes = new Map([["local", 224], ["remote", 224]]);
+    const manager = createOverlayManager(() => ({
+      isActive: () => true,
+      start: async (startParams) => { started.push(startParams); },
+      stop: async () => { stopCount += 1; },
+    }));
+    const baseParams: StartOverlayParams = {
+      ...params(),
+      assets: [
+        { id: "local", label: "Local", assetDir: "/assets/local" },
+        { id: "remote", label: "Remote", assetDir: "/assets/remote" },
+      ],
+      corner: "bottom-right",
+      getSnapshot: () => remoteSnapshot,
+      getSize: (sourceId) => runtimeSizes.get(sourceId ?? "local") ?? 224,
+    };
+
+    await manager.start(baseParams);
+    expect(started[1]?.getWindowOffset?.()).toEqual({ x: -468, y: 0 });
+    runtimeSizes.set("local", 320);
+    await manager.start(baseParams);
+
+    expect(started).toHaveLength(2);
+    expect(started[1]?.getWindowOffset?.()).toEqual({ x: -564, y: 0 });
     expect(stopCount).toBe(0);
     await manager.stop();
   });
@@ -460,6 +493,7 @@ describe("overlay lifecycle", () => {
     expect(body).toContain("openclaw-pet://watchdog-expired");
     expect(body).toContain("renderActivity(state.sources)");
     expect(body).toContain("openclaw-pet://resize?size=");
+    expect(body).toContain("&offsetX=");
     expect(body).toContain('sheet.src="/assets/"+encodeURIComponent(source.id)+"/spritesheet.webp"');
     await service.stop();
   });
@@ -469,7 +503,7 @@ describe("overlay privacy boundary", () => {
   it("exposes only renderer state", () => {
     const state = toOverlayState(snapshot, 288);
     expect(state).toEqual({
-      layout: { petSize: 288, sourceCount: 1 },
+      layout: { petSize: 288, sourceCount: 1, windowOffset: { x: 0, y: 0 } },
       sources: [{
         id: "local",
         label: "Local",
