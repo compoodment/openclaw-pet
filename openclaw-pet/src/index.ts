@@ -10,7 +10,7 @@ function safeToolName(data: Record<string, unknown>): string | undefined {
 }
 
 function safeProgressLabel(data: Record<string, unknown>): string | undefined {
-  const value = data.title ?? data.text ?? data.status;
+  const value = data.title ?? data.status;
   if (typeof value !== "string") return undefined;
   const normalized = value.replace(/\s+/g, " ").trim();
   return normalized.length > 0 && normalized.length <= 140 ? normalized : undefined;
@@ -109,7 +109,7 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
     api.agent.events.registerAgentEventSubscription({
       id: "openclaw-pet-activity",
       description: "Drive the desktop pet from sanitized agent lifecycle and tool events.",
-      streams: ["lifecycle", "tool", "error", "acp", "item", "command_output", "patch", "thinking"],
+      streams: ["lifecycle", "tool", "error", "acp", "item", "command_output", "patch"],
       handle: (event) => {
         const phase = String(event.data.phase ?? event.data.status ?? event.data.type ?? "").toLowerCase();
         if (event.stream === "acp") {
@@ -124,7 +124,7 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
           pet.progress(safeProgressLabel(event.data) ?? "Working");
           return;
         }
-        if (event.stream === "item" || event.stream === "thinking") {
+        if (event.stream === "item") {
           pet.progress(safeProgressLabel(event.data) ?? "Working");
           return;
         }

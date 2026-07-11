@@ -225,6 +225,7 @@ describe("overlay lifecycle", () => {
     const started: StartOverlayParams[] = [];
     let stopCount = 0;
     const manager = createOverlayManager(() => ({
+      isActive: () => true,
       start: async (startParams) => { started.push(startParams); },
       stop: async () => { stopCount += 1; },
     }));
@@ -244,11 +245,80 @@ describe("overlay lifecycle", () => {
     expect(started[0]?.windowOffset).toEqual({ x: 0, y: 0 });
     expect(started[0]?.getSnapshot().sources.map((source) => source.id)).toEqual(["local"]);
     expect(started[1]?.assets).toEqual([{ id: "remote", label: "Remote", assetDir: "/assets/remote" }]);
-    expect(started[1]?.windowOffset).toEqual({ x: -248, y: 0 });
+    expect(started[1]?.windowOffset).toEqual({ x: -468, y: 0 });
     expect(started[1]?.getSnapshot().sources.map((source) => source.id)).toEqual(["remote"]);
 
     await manager.stop();
     expect(stopCount).toBe(2);
+  });
+
+  it("does not restart helper windows for runtime size changes", async () => {
+    const started: StartOverlayParams[] = [];
+    let stopCount = 0;
+    const manager = createOverlayManager(() => ({
+      isActive: () => true,
+      start: async (startParams) => { started.push(startParams); },
+      stop: async () => { stopCount += 1; },
+    }));
+    const baseParams: StartOverlayParams = {
+      ...params(),
+      assets: [
+        { id: "local", label: "Local", assetDir: "/assets/local" },
+        { id: "remote", label: "Remote", assetDir: "/assets/remote" },
+      ],
+      corner: "bottom-right",
+      getSnapshot: () => remoteSnapshot,
+    };
+
+    await manager.start({ ...baseParams, size: 224 });
+    await manager.start({ ...baseParams, size: 288 });
+
+    expect(started).toHaveLength(2);
+    expect(stopCount).toBe(0);
+    await manager.stop();
+  });
+
+  it("restarts inactive helper windows without changing configuration", async () => {
+    let active = false;
+    const start = vi.fn(async () => { active = true; });
+    const stop = vi.fn(async () => { active = false; });
+    const manager = createOverlayManager(() => ({
+      isActive: () => active,
+      start,
+      stop,
+    }));
+
+    await manager.start(params());
+    active = false;
+    await manager.start(params());
+
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("serializes concurrent manager starts for the same display", async () => {
+    const started: StartOverlayParams[] = [];
+    let active = false;
+    let releaseStart: (() => void) | undefined;
+    const manager = createOverlayManager(() => ({
+      isActive: () => active,
+      start: async (startParams) => {
+        started.push(startParams);
+        await new Promise<void>((resolve) => { releaseStart = resolve; });
+        active = true;
+      },
+      stop: async () => { active = false; },
+    }));
+
+    const first = manager.start(params());
+    const second = manager.start(params());
+    await flush();
+    expect(started).toHaveLength(1);
+
+    releaseStart?.();
+    await Promise.all([first, second]);
+
+    expect(started).toHaveLength(1);
   });
 
   it("coalesces duplicate starts and closes the server on graceful stop", async () => {

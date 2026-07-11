@@ -6,6 +6,7 @@ function registerPlugin(pluginConfig: unknown = { overlay: { enabled: false } })
   const gatewayMethods = new Map<string, { handler: (options: any) => unknown; options: unknown }>();
   let httpRoute: any;
   let command: any;
+  let agentEventSubscription: any;
   const api = {
     pluginConfig,
     registrationMode: "discovery",
@@ -17,10 +18,15 @@ function registerPlugin(pluginConfig: unknown = { overlay: { enabled: false } })
     registerCommand(value: any) { command = value; },
     registerService: vi.fn(),
     on: vi.fn(),
-    agent: { events: { registerAgentEventSubscription: vi.fn() } },
+    agent: { events: { registerAgentEventSubscription: vi.fn((subscription: any) => { agentEventSubscription = subscription; }) } },
   };
   plugin.register?.(api as never);
-  return { gatewayMethods, getHttpRoute: () => httpRoute, getCommand: () => command };
+  return {
+    gatewayMethods,
+    getHttpRoute: () => httpRoute,
+    getCommand: () => command,
+    getAgentEventSubscription: () => agentEventSubscription,
+  };
 }
 
 describe("plugin bridge registration", () => {
@@ -64,5 +70,23 @@ describe("plugin bridge registration", () => {
       code: "INVALID_REQUEST",
       message: "This host is not configured as an OpenClaw Pet display.",
     });
+  });
+
+  it("does not publish model text from progress events over the bridge", async () => {
+    const registered = registerPlugin();
+    const subscription = registered.getAgentEventSubscription();
+    expect(subscription.streams).not.toContain("thinking");
+
+    subscription.handle({
+      stream: "item",
+      data: { text: "raw model reasoning should stay local" },
+    });
+
+    const bridge = registered.gatewayMethods.get(BRIDGE_SNAPSHOT_METHOD);
+    let payload: unknown;
+    await bridge?.handler({ respond: (_ok: boolean, nextPayload: unknown) => { payload = nextPayload; } });
+    const wire = JSON.stringify(payload);
+    expect(wire).not.toContain("raw model reasoning");
+    expect(wire).not.toContain("should stay local");
   });
 });

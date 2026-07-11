@@ -70,7 +70,7 @@ export type OverlayState = {
   sources: DisplaySourceState[];
 };
 
-type OverlayServiceInstance = Pick<OverlayService, "start" | "stop">;
+type OverlayServiceInstance = Pick<OverlayService, "isActive" | "start" | "stop">;
 export type OverlayServiceFactory = () => OverlayServiceInstance;
 
 type HelperExit = {
@@ -588,6 +588,10 @@ export class OverlayService {
     }
   }
 
+  isActive(): boolean {
+    return Boolean(this.server || this.helper || this.startPromise);
+  }
+
   async stop(): Promise<void> {
     this.stopRequested = true;
     if (this.stopPromise) return this.stopPromise;
@@ -614,7 +618,6 @@ export function createOverlayService(overrides: Partial<OverlayRuntime> = {}): O
 function overlayDisplayKey(params: StartOverlayParams): string {
   return JSON.stringify({
     assets: params.assets.map(({ id, assetDir }) => ({ id, assetDir })),
-    size: params.size,
     corner: params.corner,
     clickThrough: params.clickThrough ?? false,
   });
@@ -622,7 +625,7 @@ function overlayDisplayKey(params: StartOverlayParams): string {
 
 function offsetForSource(index: number, size: number, corner: string): { x: number; y: number } {
   if (index === 0) return { x: 0, y: 0 };
-  const step = size + 24;
+  const step = calculateOverlayDimensions(size, 1).width + 24;
   return {
     x: corner.endsWith("left") ? index * step : -index * step,
     y: 0,
@@ -638,34 +641,46 @@ function snapshotForSource(params: StartOverlayParams, sourceId: string): Displa
 export function createOverlayManager(createService: OverlayServiceFactory = createOverlayService) {
   let services: OverlayServiceInstance[] = [];
   let activeKey: string | undefined;
-  const stop = async (): Promise<void> => {
+  let operation: Promise<void> = resolvedPromise;
+  const serviceParams = (params: StartOverlayParams, asset: DisplaySourceAsset, index: number): StartOverlayParams => params.assets.length === 1
+    ? params
+    : {
+        ...params,
+        assets: [asset],
+        windowOffset: offsetForSource(index, params.size, params.corner),
+        getSnapshot: () => snapshotForSource(params, asset.id),
+      };
+  const stopCurrent = async (): Promise<void> => {
     const current = services;
     services = [];
     activeKey = undefined;
     await Promise.all(current.map((service) => service.stop()));
   };
+  const enqueue = (task: () => Promise<void>): Promise<void> => {
+    const next = operation.then(task, task);
+    operation = next.catch(() => undefined);
+    return next;
+  };
   return {
     async start(params: StartOverlayParams): Promise<void> {
-      const nextKey = overlayDisplayKey(params);
-      if (activeKey === nextKey && services.length > 0) return;
-      await stop();
-      activeKey = nextKey;
-      const pending = params.assets.map((asset, index) => {
-        const service = createService();
-        const serviceParams: StartOverlayParams = params.assets.length === 1
-          ? params
-          : {
-              ...params,
-              assets: [asset],
-              windowOffset: offsetForSource(index, params.size, params.corner),
-              getSnapshot: () => snapshotForSource(params, asset.id),
-            };
-        return { service, params: serviceParams };
+      await enqueue(async () => {
+        const nextKey = overlayDisplayKey(params);
+        if (activeKey === nextKey && services.length === params.assets.length) {
+          if (services.every((service) => service.isActive())) return;
+          await Promise.all(params.assets.map((asset, index) => services[index]!.start(serviceParams(params, asset, index))));
+          return;
+        }
+        await stopCurrent();
+        activeKey = nextKey;
+        const pending = params.assets.map((asset, index) => {
+          const service = createService();
+          return { service, params: serviceParams(params, asset, index) };
+        });
+        services = pending.map(({ service }) => service);
+        await Promise.all(pending.map(({ service, params: serviceParams }) => service.start(serviceParams)));
       });
-      services = pending.map(({ service }) => service);
-      await Promise.all(pending.map(({ service, params: serviceParams }) => service.start(serviceParams)));
     },
-    stop,
+    stop: () => enqueue(stopCurrent),
   };
 }
 
