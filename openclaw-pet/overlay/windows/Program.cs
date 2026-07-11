@@ -44,7 +44,7 @@ internal static class Program
     }
 }
 
-internal sealed record OverlayArguments(int Port, int Size, string Corner, bool ClickThrough, int SourceCount)
+internal sealed record OverlayArguments(int Port, int Size, string Corner, bool ClickThrough, int SourceCount, int OffsetX, int OffsetY)
 {
     private static readonly HashSet<string> Corners =
     [
@@ -68,7 +68,9 @@ internal sealed record OverlayArguments(int Port, int Size, string Corner, bool 
         var clickThrough = args.Length >= 4 && bool.TryParse(args[3], out var parsed) && parsed;
         var sourceCount = args.Length >= 5 && int.TryParse(args[4], out var parsedCount) ? parsedCount : 1;
         if (sourceCount is < 1 or > 16) return false;
-        options = new OverlayArguments(port, size, args[2], clickThrough, sourceCount);
+        var offsetX = args.Length >= 6 && int.TryParse(args[5], out var parsedOffsetX) ? parsedOffsetX : 0;
+        var offsetY = args.Length >= 7 && int.TryParse(args[6], out var parsedOffsetY) ? parsedOffsetY : 0;
+        options = new OverlayArguments(port, size, args[2], clickThrough, sourceCount, offsetX, offsetY);
         return true;
     }
 }
@@ -146,12 +148,12 @@ internal sealed class OverlayWindow : Window
     {
         const double edge = 20;
         var workArea = SystemParameters.WorkArea;
-        Left = options.Corner.EndsWith("left", StringComparison.Ordinal)
+        Left = (options.Corner.EndsWith("left", StringComparison.Ordinal)
             ? workArea.Left + edge
-            : workArea.Right - Width - edge;
-        Top = options.Corner.StartsWith("top", StringComparison.Ordinal)
+            : workArea.Right - Width - edge) + options.OffsetX;
+        Top = (options.Corner.StartsWith("top", StringComparison.Ordinal)
             ? workArea.Top + edge
-            : workArea.Bottom - Height - edge;
+            : workArea.Bottom - Height - edge) + options.OffsetY;
     }
 
     private void ConfigureNativeWindow(object? sender, EventArgs eventArgs)

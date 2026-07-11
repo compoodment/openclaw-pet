@@ -1,6 +1,6 @@
 # OpenClaw Pet
 
-A native OpenClaw plugin that turns user-supplied Codex-compatible pet atlases into one transparent, always-on-top desktop overlay on macOS and Windows 11. A display can combine its local OpenClaw activity with activity pulled from remote OpenClaw Gateways.
+A native OpenClaw plugin that turns user-supplied Codex-compatible pet atlases into transparent, always-on-top desktop pets on macOS and Windows 11. A display can combine its local OpenClaw activity with activity pulled from remote OpenClaw Gateways.
 
 ## Privacy
 
@@ -10,7 +10,7 @@ Remote sources are pull-only: the display host periodically fetches the remote p
 
 The native overlay receives source IDs, display labels, availability, sanitized pet state, layout, and locally hosted sprite sheets over an ephemeral HTTP server bound to `127.0.0.1`. Every source's `assetDir` is a display-host-local setting and never appears in either the Gateway bridge or renderer state JSON.
 
-The Windows WebView2 helper only permits navigation to that loopback origin and the internal watchdog/resize signals. The macOS and Windows helpers accept the same arguments and resize the shared multi-pet surface when the display host changes its runtime size.
+The Windows WebView2 helper only permits navigation to that loopback origin and the internal watchdog/resize signals. The macOS and Windows helpers accept the same arguments and resize each pet window when the display host changes its runtime size.
 
 Both native helpers load the same renderer from the loopback server. If that renderer cannot reach `/state` for 10 consecutive seconds, its watchdog asks the native helper to exit so a Gateway crash cannot leave an orphaned pet running indefinitely.
 
@@ -80,6 +80,8 @@ Install and enable the plugin on each remote source Gateway. A source-only host 
 
 The display retains the last validated remote animation data but visibly marks a source unavailable whenever polling fails or returns a non-conforming snapshot. Polling never overlaps for a given source: the next poll is scheduled after the previous request finishes.
 
+Each configured source is rendered in its own native helper window. Multiple pets start near the configured corner with a small stagger, then can be dragged independently when `overlay.clickThrough` is `false`.
+
 ## Runtime sizing
 
 `overlay.size` sets the startup size from 96 through 768 pixels. On a display host, change it without restarting through the write-scoped Gateway method:
@@ -90,7 +92,7 @@ openclaw gateway call openclaw-pet.resize --params '{"size":288}'
 
 The equivalent chat command is `/pet resize 288`. Runtime sizing is intentionally not part of `openclaw-pet.bridge.snapshot`; a source Gateway cannot change a display host's layout through the bridge. Runtime changes are in-memory and the configured `overlay.size` is used again after restart.
 
-`overlay.clickThrough` is optional and defaults to `false`, preserving the draggable overlay. Set it to `true` to pass pointer input to windows underneath the pets; a click-through overlay cannot be dragged, so change its corner in config and restart the Gateway to reposition it.
+`overlay.clickThrough` is optional and defaults to `false`, preserving draggable pet windows. Set it to `true` to pass pointer input to windows underneath the pets; click-through pets cannot be dragged, so change the corner in config and restart the Gateway to reposition them.
 
 ## Build prerequisites
 
@@ -117,7 +119,7 @@ Run the two `openclaw` inspection commands after installing or linking the plugi
 The Windows helper uses a borderless WPF window, WebView2 composition rendering, the Win32 topmost/non-activating styles, and an optional transparent input style. It does not appear in the taskbar or intentionally take focus.
 
 - Corner placement currently uses the primary display’s work area.
-- With the default `clickThrough: false`, drag any pet to reposition the overlay temporarily; the adjacent activity panel remains interactive.
+- With the default `clickThrough: false`, drag any pet to reposition that pet temporarily; its adjacent activity panel remains interactive.
 - With `clickThrough: true`, clicks pass through where Windows permits, but dragging is unavailable.
 - The build emits one architecture-specific executable. Rebuild on x64, ARM64, or x86 when distributing to a different architecture.
 
@@ -130,6 +132,6 @@ Before release, manually smoke-test on Windows 11:
 
 Before release, manually smoke-test on macOS:
 
-- The shared loopback renderer is transparent, animates, and remains draggable by default.
+- Each loopback renderer is transparent, animates, and remains draggable by default.
 - `clickThrough: true` passes input through and disables dragging.
 - Normal Gateway stop closes the helper, and the watchdog closes it after a forced Gateway termination.

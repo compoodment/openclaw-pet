@@ -24,6 +24,7 @@ export type StartOverlayParams = {
   size: number;
   corner: string;
   clickThrough?: boolean;
+  windowOffset?: { x: number; y: number };
   getSnapshot: () => DisplaySnapshot;
   getSize?: () => number;
   logger: { warn: (message: string) => void };
@@ -68,6 +69,9 @@ export type OverlayState = {
   };
   sources: DisplaySourceState[];
 };
+
+type OverlayServiceInstance = Pick<OverlayService, "start" | "stop">;
+export type OverlayServiceFactory = () => OverlayServiceInstance;
 
 type HelperExit = {
   code: number | null;
@@ -119,13 +123,22 @@ export function selectOverlayHelper(platform: NodeJS.Platform, distDir: string):
 export function buildOverlayCommand(
   platform: NodeJS.Platform,
   distDir: string,
-  params: Pick<StartOverlayParams, "size" | "corner" | "clickThrough"> & { port: number; sourceCount: number },
+  params: Pick<StartOverlayParams, "size" | "corner" | "clickThrough" | "windowOffset"> & { port: number; sourceCount: number },
 ): OverlayCommand | undefined {
   const helper = selectOverlayHelper(platform, distDir);
   if (!helper) return undefined;
+  const offset = params.windowOffset ?? { x: 0, y: 0 };
   return {
     ...helper,
-    args: [String(params.port), String(params.size), params.corner, String(params.clickThrough ?? false), String(params.sourceCount)],
+    args: [
+      String(params.port),
+      String(params.size),
+      params.corner,
+      String(params.clickThrough ?? false),
+      String(params.sourceCount),
+      String(offset.x),
+      String(offset.y),
+    ],
   };
 }
 
@@ -598,12 +611,70 @@ export function createOverlayService(overrides: Partial<OverlayRuntime> = {}): O
   return new OverlayService({ ...defaultRuntime, ...overrides });
 }
 
-const overlayService = createOverlayService();
+function overlayDisplayKey(params: StartOverlayParams): string {
+  return JSON.stringify({
+    assets: params.assets.map(({ id, assetDir }) => ({ id, assetDir })),
+    size: params.size,
+    corner: params.corner,
+    clickThrough: params.clickThrough ?? false,
+  });
+}
+
+function offsetForSource(index: number, size: number, corner: string): { x: number; y: number } {
+  if (index === 0) return { x: 0, y: 0 };
+  const step = size + 24;
+  return {
+    x: corner.endsWith("left") ? index * step : -index * step,
+    y: 0,
+  };
+}
+
+function snapshotForSource(params: StartOverlayParams, sourceId: string): DisplaySnapshot {
+  return {
+    sources: params.getSnapshot().sources.filter((source) => source.id === sourceId),
+  };
+}
+
+export function createOverlayManager(createService: OverlayServiceFactory = createOverlayService) {
+  let services: OverlayServiceInstance[] = [];
+  let activeKey: string | undefined;
+  const stop = async (): Promise<void> => {
+    const current = services;
+    services = [];
+    activeKey = undefined;
+    await Promise.all(current.map((service) => service.stop()));
+  };
+  return {
+    async start(params: StartOverlayParams): Promise<void> {
+      const nextKey = overlayDisplayKey(params);
+      if (activeKey === nextKey && services.length > 0) return;
+      await stop();
+      activeKey = nextKey;
+      const pending = params.assets.map((asset, index) => {
+        const service = createService();
+        const serviceParams: StartOverlayParams = params.assets.length === 1
+          ? params
+          : {
+              ...params,
+              assets: [asset],
+              windowOffset: offsetForSource(index, params.size, params.corner),
+              getSnapshot: () => snapshotForSource(params, asset.id),
+            };
+        return { service, params: serviceParams };
+      });
+      services = pending.map(({ service }) => service);
+      await Promise.all(pending.map(({ service, params: serviceParams }) => service.start(serviceParams)));
+    },
+    stop,
+  };
+}
+
+const overlayManager = createOverlayManager();
 
 export async function startOverlay(params: StartOverlayParams): Promise<void> {
-  await overlayService.start(params);
+  await overlayManager.start(params);
 }
 
 export async function stopOverlay(): Promise<void> {
-  await overlayService.stop();
+  await overlayManager.stop();
 }

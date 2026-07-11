@@ -48,13 +48,15 @@ guard CommandLine.arguments.count >= 4,
 let corner = CommandLine.arguments[3]
 let clickThrough = CommandLine.arguments.count >= 5 && CommandLine.arguments[4] == "true"
 let sourceCount = CommandLine.arguments.count >= 6 ? max(1, min(16, Int(CommandLine.arguments[5]) ?? 1)) : 1
+let offsetX = CommandLine.arguments.count >= 7 ? Int(CommandLine.arguments[6]) ?? 0 : 0
+let offsetY = CommandLine.arguments.count >= 8 ? Int(CommandLine.arguments[7]) ?? 0 : 0
 let frame = NSScreen.main?.visibleFrame ?? .zero
 let edge: CGFloat = 20
 let activityWidth: CGFloat = 220
 let panelWidth = max(CGFloat(size * sourceCount) + activityWidth, 320)
 let panelHeight = max(CGFloat(size), 160)
-let panelX = corner.contains("left") ? frame.minX + edge : frame.maxX - panelWidth - edge
-let y = corner.contains("top") ? frame.maxY - panelHeight - edge : frame.minY + edge
+let panelX = (corner.contains("left") ? frame.minX + edge : frame.maxX - panelWidth - edge) + CGFloat(offsetX)
+let y = (corner.contains("top") ? frame.maxY - panelHeight - edge : frame.minY + edge) + CGFloat(offsetY)
 let panel = NSPanel(contentRect: NSRect(x: panelX, y: y, width: panelWidth, height: panelHeight), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
 panel.level = NSWindow.Level.floating; panel.collectionBehavior = [NSWindow.CollectionBehavior.canJoinAllSpaces, NSWindow.CollectionBehavior.fullScreenAuxiliary, NSWindow.CollectionBehavior.stationary]
 panel.isOpaque = false; panel.backgroundColor = NSColor.clear; panel.hasShadow = false; panel.ignoresMouseEvents = clickThrough; panel.becomesKeyOnlyIfNeeded = true

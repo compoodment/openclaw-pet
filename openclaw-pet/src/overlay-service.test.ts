@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildOverlayCommand,
   calculateOverlayDimensions,
+  createOverlayManager,
   createOverlayService,
   normalizeOverlaySize,
   selectOverlayHelper,
@@ -27,6 +28,23 @@ const snapshot: DisplaySnapshot = {
       activity: [{ id: 7, label: "Running safe-tool", tone: "active" }],
     },
   }],
+};
+
+const remoteSnapshot: DisplaySnapshot = {
+  sources: [
+    snapshot.sources[0],
+    {
+      id: "remote",
+      label: "Remote",
+      available: true,
+      state: {
+        animation: "idle",
+        changedAt: 5678,
+        activityLabel: "Ready",
+        activity: [{ id: 8, label: "Ready", tone: "neutral" }],
+      },
+    },
+  ],
 };
 
 function params(warn = vi.fn()): StartOverlayParams {
@@ -176,11 +194,13 @@ describe("overlay platform selection", () => {
 
   it("constructs the same helper arguments on both supported platforms", () => {
     const options = { port: 43123, size: 256, corner: "top-left", clickThrough: true, sourceCount: 3 };
-    expect(buildOverlayCommand("darwin", "/plugin/dist", options)?.args).toEqual(["43123", "256", "top-left", "true", "3"]);
-    expect(buildOverlayCommand("win32", "/plugin/dist", options)?.args).toEqual(["43123", "256", "top-left", "true", "3"]);
+    expect(buildOverlayCommand("darwin", "/plugin/dist", options)?.args).toEqual(["43123", "256", "top-left", "true", "3", "0", "0"]);
+    expect(buildOverlayCommand("win32", "/plugin/dist", options)?.args).toEqual(["43123", "256", "top-left", "true", "3", "0", "0"]);
+    expect(buildOverlayCommand("win32", "/plugin/dist", { ...options, windowOffset: { x: 280, y: -20 } })?.args)
+      .toEqual(["43123", "256", "top-left", "true", "3", "280", "-20"]);
   });
 
-  it("bounds runtime sizes and calculates a shared multi-pet frame", () => {
+  it("bounds runtime sizes and calculates helper frame dimensions", () => {
     expect(normalizeOverlaySize("96")).toBe(96);
     expect(normalizeOverlaySize(768)).toBe(768);
     expect(normalizeOverlaySize(95)).toBeUndefined();
@@ -201,6 +221,36 @@ describe("overlay platform selection", () => {
 });
 
 describe("overlay lifecycle", () => {
+  it("starts and stops separate helper windows for multiple sources", async () => {
+    const started: StartOverlayParams[] = [];
+    let stopCount = 0;
+    const manager = createOverlayManager(() => ({
+      start: async (startParams) => { started.push(startParams); },
+      stop: async () => { stopCount += 1; },
+    }));
+    await manager.start({
+      ...params(),
+      assets: [
+        { id: "local", label: "Local", assetDir: "/assets/local" },
+        { id: "remote", label: "Remote", assetDir: "/assets/remote" },
+      ],
+      size: 224,
+      corner: "bottom-right",
+      getSnapshot: () => remoteSnapshot,
+    });
+
+    expect(started).toHaveLength(2);
+    expect(started[0]?.assets).toEqual([{ id: "local", label: "Local", assetDir: "/assets/local" }]);
+    expect(started[0]?.windowOffset).toEqual({ x: 0, y: 0 });
+    expect(started[0]?.getSnapshot().sources.map((source) => source.id)).toEqual(["local"]);
+    expect(started[1]?.assets).toEqual([{ id: "remote", label: "Remote", assetDir: "/assets/remote" }]);
+    expect(started[1]?.windowOffset).toEqual({ x: -248, y: 0 });
+    expect(started[1]?.getSnapshot().sources.map((source) => source.id)).toEqual(["remote"]);
+
+    await manager.stop();
+    expect(stopCount).toBe(2);
+  });
+
   it("coalesces duplicate starts and closes the server on graceful stop", async () => {
     const { service, servers, children, spawnHelper, createHttpServer } = harness();
     await Promise.all([service.start(params()), service.start(params())]);
