@@ -1,6 +1,8 @@
 import { definePluginEntry, type OpenClawPluginDefinition } from "openclaw/plugin-sdk/plugin-entry";
+import { toBridgeSnapshot } from "./bridge.js";
 import { createPetController, type PetConfig } from "./pet-controller.js";
-import { startOverlay, stopOverlay } from "./overlay-service.js";
+import { normalizeOverlaySize, startOverlay, stopOverlay } from "./overlay-service.js";
+import { BRIDGE_SNAPSHOT_METHOD, SourceCoordinator, type DisplaySourceAsset } from "./source-coordinator.js";
 
 function safeToolName(data: Record<string, unknown>): string | undefined {
   const value = data.toolName ?? data.name;
@@ -8,7 +10,7 @@ function safeToolName(data: Record<string, unknown>): string | undefined {
 }
 
 function safeProgressLabel(data: Record<string, unknown>): string | undefined {
-  const value = data.title ?? data.text ?? data.status;
+  const value = data.title ?? data.status;
   if (typeof value !== "string") return undefined;
   const normalized = value.replace(/\s+/g, " ").trim();
   return normalized.length > 0 && normalized.length <= 140 ? normalized : undefined;
@@ -19,24 +21,123 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
   name: "OpenClaw Pet",
   description: "A privacy-preserving desktop pet that reflects OpenClaw activity.",
   register(api) {
-    const config = api.pluginConfig as PetConfig;
-    const pet = createPetController(config);
+    const config = (api.pluginConfig ?? {}) as PetConfig;
+    const controllerAssetDir = config.assetDir ?? config.sources?.find((source) => !source.gateway)?.assetDir;
+    const pet = createPetController({ ...config, assetDir: controllerAssetDir });
+    const sources = new SourceCoordinator({ config, getLocalSnapshot: () => pet.snapshot(), logger: api.logger });
+    let overlaySize = normalizeOverlaySize(config?.overlay?.size) ?? 224;
+    const sourceSizes = new Map<string, number>();
+    let overlayStateDir = process.env.TMPDIR ?? "/tmp";
+    const getSourceSize = (sourceId?: string): number => {
+      if (!sourceId) return overlaySize;
+      const source = sources.assets().find((candidate) => candidate.id === sourceId);
+      return sourceSizes.get(sourceId) ?? source?.size ?? overlaySize;
+    };
+    const displayAssets = (): DisplaySourceAsset[] => sources.assets().map((source) => ({
+      ...source,
+      size: getSourceSize(source.id),
+    }));
+    const sourceSizeStatus = () => sources.assets().map((source) => ({
+      id: source.id,
+      size: getSourceSize(source.id),
+      customSize: sourceSizes.has(source.id),
+    }));
     const launchOverlay = async (stateDir: string) => {
-      const state = pet.initialize();
-      if (!state.valid || config?.enabled === false || config?.overlay?.enabled === false) return;
+      overlayStateDir = stateDir;
+      if (config?.enabled === false || config?.overlay?.enabled === false) return;
+      const assets = displayAssets();
+      if (assets.length === 0) return;
+      sources.start();
       await startOverlay({
         stateDir,
-        assetDir: state.assetDir!,
-        size: config?.overlay?.size ?? 224,
+        assets,
+        size: overlaySize,
         corner: config?.overlay?.corner ?? "bottom-right",
         clickThrough: config?.overlay?.clickThrough ?? false,
-        getSnapshot: () => pet.snapshot(),
+        getSnapshot: () => sources.snapshot(),
+        getSize: getSourceSize,
         logger: api.logger,
       });
     };
 
-    api.registerGatewayMethod("openclaw-pet.status", async ({ respond }) => { await launchOverlay(process.env.TMPDIR ?? "/tmp"); respond(true, pet.snapshot()); }, { scope: "operator.read" });
-    api.registerGatewayMethod("openclaw-pet.reset", async ({ respond }) => { await launchOverlay(process.env.TMPDIR ?? "/tmp"); respond(true, pet.reset()); }, { scope: "operator.write" });
+    const displayStatus = () => ({
+      enabled: config?.enabled !== false && config?.overlay?.enabled !== false && sources.assets().length > 0,
+      size: overlaySize,
+      sources: sources.snapshot().sources.map(({ id, label, available }) => ({
+        id,
+        label,
+        available,
+        size: getSourceSize(id),
+        customSize: sourceSizes.has(id),
+      })),
+    });
+    const resize = async (
+      value: unknown,
+      sourceId?: string,
+    ): Promise<{ ok: true; size: number; sourceId?: string; sourceCount: number; sources: ReturnType<typeof sourceSizeStatus> } | { ok: false; message: string }> => {
+      const assets = sources.assets();
+      if (config?.enabled === false || config?.overlay?.enabled === false || assets.length === 0) {
+        return { ok: false, message: "This host is not configured as an OpenClaw Pet display." };
+      }
+      const size = normalizeOverlaySize(value);
+      if (!size) return { ok: false, message: "size must be an integer from 96 through 768." };
+      if (sourceId) {
+        const source = assets.find((candidate) => candidate.id === sourceId);
+        if (!source) return { ok: false, message: `Unknown pet source "${sourceId}".` };
+        sourceSizes.set(source.id, size);
+      } else {
+        overlaySize = size;
+        for (const source of assets) sourceSizes.set(source.id, size);
+      }
+      await launchOverlay(overlayStateDir);
+      return { ok: true, size, ...(sourceId ? { sourceId } : {}), sourceCount: assets.length, sources: sourceSizeStatus() };
+    };
+
+    api.registerGatewayMethod(BRIDGE_SNAPSHOT_METHOD, ({ respond }) => {
+      respond(true, toBridgeSnapshot(pet.snapshot()));
+    }, { scope: "operator.read" });
+    api.registerHttpRoute({
+      path: "/api/openclaw-pet/v1/snapshot",
+      auth: "gateway",
+      match: "exact",
+      gatewayRuntimeScopeSurface: "trusted-operator",
+      handler: (req, res) => {
+        if (req.method !== "GET" && req.method !== "HEAD") {
+          res.writeHead(405, { allow: "GET, HEAD" }).end();
+          return true;
+        }
+        res.writeHead(200, {
+          "cache-control": "no-store",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+        });
+        if (req.method === "HEAD") res.end();
+        else res.end(JSON.stringify(toBridgeSnapshot(pet.snapshot())));
+        return true;
+      },
+    });
+    api.registerGatewayMethod("openclaw-pet.status", async ({ respond }) => {
+      await launchOverlay(overlayStateDir);
+      respond(true, { ...pet.snapshot(), display: displayStatus() });
+    }, { scope: "operator.read" });
+    api.registerGatewayMethod("openclaw-pet.reset", async ({ respond }) => {
+      await launchOverlay(overlayStateDir);
+      respond(true, pet.reset());
+    }, { scope: "operator.write" });
+    api.registerGatewayMethod("openclaw-pet.resize", async ({ params, respond }) => {
+      const options = params && typeof params === "object" ? params as Record<string, unknown> : {};
+      const sourceId = typeof options.sourceId === "string"
+        ? options.sourceId
+        : typeof options.source === "string"
+          ? options.source
+          : undefined;
+      const result = await resize(options.size, sourceId);
+      if (!result.ok) {
+        respond(false, undefined, { code: "INVALID_REQUEST", message: result.message });
+        return;
+      }
+      respond(true, result);
+    }, { scope: "operator.write" });
 
     api.on("model_call_started", () => { void launchOverlay(process.env.TMPDIR ?? "/tmp"); pet.modelStarted(); });
     api.on("before_tool_call", (event) => { void launchOverlay(process.env.TMPDIR ?? "/tmp"); pet.toolStarted(safeToolName({ toolName: event.toolName })); });
@@ -46,7 +147,7 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
     api.agent.events.registerAgentEventSubscription({
       id: "openclaw-pet-activity",
       description: "Drive the desktop pet from sanitized agent lifecycle and tool events.",
-      streams: ["lifecycle", "tool", "error", "acp", "item", "command_output", "patch", "thinking"],
+      streams: ["lifecycle", "tool", "error", "acp", "item", "command_output", "patch"],
       handle: (event) => {
         const phase = String(event.data.phase ?? event.data.status ?? event.data.type ?? "").toLowerCase();
         if (event.stream === "acp") {
@@ -61,7 +162,7 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
           pet.progress(safeProgressLabel(event.data) ?? "Working");
           return;
         }
-        if (event.stream === "item" || event.stream === "thinking") {
+        if (event.stream === "item") {
           pet.progress(safeProgressLabel(event.data) ?? "Working");
           return;
         }
@@ -82,15 +183,29 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
       description: "Show or reset the desktop pet.",
       acceptsArgs: true,
       handler: async (ctx) => {
-        await launchOverlay(process.env.TMPDIR ?? "/tmp");
-        return ctx.args?.trim() === "reset" ? { text: pet.reset().message } : { text: pet.statusText() };
+        await launchOverlay(overlayStateDir);
+        const args = ctx.args?.trim() ?? "";
+        if (args === "reset") return { text: pet.reset().message };
+        const sourceResizeMatch = args.match(/^resize\s+([a-zA-Z0-9_-]{1,32})\s+(\d+)$/);
+        if (sourceResizeMatch) {
+          const result = await resize(sourceResizeMatch[2], sourceResizeMatch[1]);
+          return { text: result.ok ? `Pet source ${result.sourceId} resized to ${result.size}px.` : `Pet resize failed: ${result.message}` };
+        }
+        const resizeMatch = args.match(/^resize\s+(\d+)$/);
+        if (resizeMatch) {
+          const result = await resize(resizeMatch[1]);
+          return { text: result.ok ? `All pet displays resized to ${result.size}px.` : `Pet resize failed: ${result.message}` };
+        }
+        const display = displayStatus();
+        const sourceSummary = display.sources.map((source) => `${source.label} ${source.size}px`).join(", ");
+        return { text: `${pet.statusText()} Display: ${sourceSummary || `${overlaySize}px`}; ${sources.assets().length} source(s).` };
       },
     });
 
     api.registerService({
       id: "openclaw-pet-overlay",
       async start(ctx) { await launchOverlay(ctx.stateDir); },
-      async stop() { await stopOverlay(); },
+      async stop() { sources.stop(); await stopOverlay(); },
     });
 
     if (api.registrationMode === "full") {

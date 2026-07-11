@@ -1,8 +1,8 @@
 # OpenClaw Pet
 
-A native OpenClaw plugin that displays a user-supplied, Codex-compatible animated pet as a transparent desktop overlay on macOS and Windows 11.
+A native OpenClaw plugin that displays multiple local and remote OpenClaw activity sources as independent transparent desktop pets on macOS and Windows 11.
 
-The plugin observes sanitized OpenClaw lifecycle events and maps them to display-only pet state; the overlay receives only allowlisted animation/activity labels and local sprite assets, never prompts, tool arguments, results, credentials, asset paths, or controller errors.
+The display host pulls strict, sanitized snapshots from remote Gateways and serves only allowlisted animation/activity state plus display-host-local sprite assets to the native overlay. Prompts, tool arguments/results, credentials, asset paths, and controller errors never cross the pet bridge.
 
 ## Repository layout
 

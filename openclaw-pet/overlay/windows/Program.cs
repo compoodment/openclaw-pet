@@ -18,7 +18,7 @@ internal static class Program
     {
         if (!OverlayArguments.TryParse(args, out var options))
         {
-            Console.Error.WriteLine("Usage: pet-overlay-win.exe <port> <size> <corner> [clickThrough]");
+            Console.Error.WriteLine("Usage: pet-overlay-win.exe <port> <size> <corner> [clickThrough] [sourceCount]");
             return 2;
         }
 
@@ -44,7 +44,7 @@ internal static class Program
     }
 }
 
-internal sealed record OverlayArguments(int Port, int Size, string Corner, bool ClickThrough)
+internal sealed record OverlayArguments(int Port, int Size, string Corner, bool ClickThrough, int SourceCount, int OffsetX, int OffsetY)
 {
     private static readonly HashSet<string> Corners =
     [
@@ -59,14 +59,18 @@ internal sealed record OverlayArguments(int Port, int Size, string Corner, bool 
         options = null!;
         if (args.Length < 3 ||
             !int.TryParse(args[0], out var port) || port is < 1 or > 65535 ||
-            !int.TryParse(args[1], out var size) || size < 1 ||
+            !int.TryParse(args[1], out var size) || size is < 96 or > 768 ||
             !Corners.Contains(args[2]))
         {
             return false;
         }
 
         var clickThrough = args.Length >= 4 && bool.TryParse(args[3], out var parsed) && parsed;
-        options = new OverlayArguments(port, size, args[2], clickThrough);
+        var sourceCount = args.Length >= 5 && int.TryParse(args[4], out var parsedCount) ? parsedCount : 1;
+        if (sourceCount is < 1 or > 16) return false;
+        var offsetX = args.Length >= 6 && int.TryParse(args[5], out var parsedOffsetX) ? parsedOffsetX : 0;
+        var offsetY = args.Length >= 7 && int.TryParse(args[6], out var parsedOffsetY) ? parsedOffsetY : 0;
+        options = new OverlayArguments(port, size, args[2], clickThrough, sourceCount, offsetX, offsetY);
         return true;
     }
 }
@@ -88,6 +92,7 @@ internal sealed class OverlayWindow : Window
     private readonly OverlayArguments options;
     private readonly WebView2CompositionControl webView;
     private readonly Uri origin;
+    private readonly Border? dragSurface;
 
     internal OverlayWindow(OverlayArguments options)
     {
@@ -95,7 +100,7 @@ internal sealed class OverlayWindow : Window
         origin = new Uri($"http://127.0.0.1:{options.Port}/");
 
         Title = "OpenClaw Pet";
-        Width = Math.Max(options.Size + 96, 320);
+        Width = Math.Max(options.Size * options.SourceCount + 220, 320);
         Height = Math.Max(options.Size, 160);
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
@@ -119,11 +124,11 @@ internal sealed class OverlayWindow : Window
         root.Children.Add(webView);
         if (!options.ClickThrough)
         {
-            var dragSurface = new Border
+            dragSurface = new Border
             {
                 Background = Brushes.Transparent,
                 Cursor = Cursors.SizeAll,
-                Width = options.Size,
+                Width = options.Size * options.SourceCount,
                 Height = options.Size,
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Bottom,
@@ -143,12 +148,12 @@ internal sealed class OverlayWindow : Window
     {
         const double edge = 20;
         var workArea = SystemParameters.WorkArea;
-        Left = options.Corner.EndsWith("left", StringComparison.Ordinal)
+        Left = (options.Corner.EndsWith("left", StringComparison.Ordinal)
             ? workArea.Left + edge
-            : workArea.Right - Width - edge;
-        Top = options.Corner.StartsWith("top", StringComparison.Ordinal)
+            : workArea.Right - Width - edge) + options.OffsetX;
+        Top = (options.Corner.StartsWith("top", StringComparison.Ordinal)
             ? workArea.Top + edge
-            : workArea.Bottom - Height - edge;
+            : workArea.Bottom - Height - edge) + options.OffsetY;
     }
 
     private void ConfigureNativeWindow(object? sender, EventArgs eventArgs)
@@ -223,6 +228,15 @@ internal sealed class OverlayWindow : Window
                     Dispatcher.BeginInvoke(() => Application.Current.Shutdown(0));
                     return;
                 }
+                if (target.Scheme == "openclaw-pet" && target.Host == "resize")
+                {
+                    navigation.Cancel = true;
+                    if (TryParseResize(target, out var size, out var sourceCount))
+                    {
+                        Dispatcher.BeginInvoke(() => ApplyRuntimeSize(size, sourceCount));
+                    }
+                    return;
+                }
                 if (
                     target.Scheme != origin.Scheme ||
                     target.Host != origin.Host ||
@@ -246,6 +260,38 @@ internal sealed class OverlayWindow : Window
             Console.Error.WriteLine($"WebView2 initialization failed: {error.Message}");
             Application.Current.Shutdown(1);
         }
+    }
+
+    private void ApplyRuntimeSize(int size, int sourceCount)
+    {
+        var oldLeft = Left;
+        var oldRight = Left + Width;
+        var oldBottom = Top + Height;
+        Width = Math.Max(size * sourceCount + 220, 320);
+        Height = Math.Max(size, 160);
+        Left = options.Corner.EndsWith("left", StringComparison.Ordinal) ? oldLeft : oldRight - Width;
+        if (!options.Corner.StartsWith("top", StringComparison.Ordinal)) Top = oldBottom - Height;
+        if (dragSurface is not null)
+        {
+            dragSurface.Width = size * sourceCount;
+            dragSurface.Height = size;
+        }
+    }
+
+    private static bool TryParseResize(Uri target, out int size, out int sourceCount)
+    {
+        size = 0;
+        sourceCount = 0;
+        foreach (var pair in target.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = pair.Split('=', 2);
+            if (parts.Length != 2) continue;
+            var name = Uri.UnescapeDataString(parts[0]);
+            var value = Uri.UnescapeDataString(parts[1]);
+            if (name == "size") int.TryParse(value, out size);
+            if (name == "count") int.TryParse(value, out sourceCount);
+        }
+        return size is >= 96 and <= 768 && sourceCount is >= 1 and <= 16;
     }
 
     private static IntPtr ReadWindowLongPointer(IntPtr window, int index)
