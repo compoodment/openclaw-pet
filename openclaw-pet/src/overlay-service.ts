@@ -27,6 +27,7 @@ export type StartOverlayParams = {
   windowOffset?: { x: number; y: number };
   getSnapshot: () => DisplaySnapshot;
   getSize?: (sourceId?: string) => number;
+  getWindowOffset?: (sourceId?: string) => { x: number; y: number };
   logger: { warn: (message: string) => void };
 };
 
@@ -66,6 +67,7 @@ export type OverlayState = {
   layout: {
     petSize: number;
     sourceCount: number;
+    windowOffset: { x: number; y: number };
   };
   sources: DisplaySourceState[];
 };
@@ -156,9 +158,9 @@ export function calculateOverlayDimensions(size: number, sourceCount: number): {
   };
 }
 
-export function toOverlayState(snapshot: DisplaySnapshot, petSize: number): OverlayState {
+export function toOverlayState(snapshot: DisplaySnapshot, petSize: number, windowOffset: { x: number; y: number } = { x: 0, y: 0 }): OverlayState {
   return {
-    layout: { petSize, sourceCount: snapshot.sources.length },
+    layout: { petSize, sourceCount: snapshot.sources.length, windowOffset },
     sources: snapshot.sources.map(({ id, label, available, state }) => ({
       id,
       label,
@@ -176,6 +178,11 @@ export function toOverlayState(snapshot: DisplaySnapshot, petSize: number): Over
 function effectiveOverlaySize(params: Pick<StartOverlayParams, "assets" | "getSize" | "size">): number {
   const sourceId = params.assets.length === 1 ? params.assets[0]?.id : undefined;
   return params.getSize?.(sourceId) ?? params.assets[0]?.size ?? params.size;
+}
+
+function effectiveWindowOffset(params: Pick<StartOverlayParams, "assets" | "getWindowOffset" | "windowOffset">): { x: number; y: number } {
+  const sourceId = params.assets.length === 1 ? params.assets[0]?.id : undefined;
+  return params.getWindowOffset?.(sourceId) ?? params.windowOffset ?? { x: 0, y: 0 };
 }
 
 function overlayHtml(size: number, sourceCount: number): string {
@@ -216,8 +223,8 @@ function overlayHtml(size: number, sourceCount: number): string {
     const activityPanel=document.querySelector("#activity");
     const toggle=document.querySelector("#toggle");
     const watchdogMs=10000;
-    let state={layout:{petSize:${size},sourceCount:${Math.max(1, sourceCount)}},sources:[]};
-    let layoutKey="${size}:${Math.max(1, sourceCount)}";
+    let state={layout:{petSize:${size},sourceCount:${Math.max(1, sourceCount)},windowOffset:{x:0,y:0}},sources:[]};
+    let layoutKey="${size}:${Math.max(1, sourceCount)}:0:0";
     let lastStateAt=Date.now(),shutdownRequested=false;
     let collapsed=false;
     const renderers=new Map();
@@ -281,11 +288,14 @@ function overlayHtml(size: number, sourceCount: number): string {
     function applyLayout(layout){
       const petSize=layout&&layout.petSize||${size};
       const count=Math.max(1,layout&&layout.sourceCount||1);
+      const offset=layout&&layout.windowOffset||{x:0,y:0};
+      const offsetX=Number.isFinite(offset.x)?offset.x:0;
+      const offsetY=Number.isFinite(offset.y)?offset.y:0;
       document.documentElement.style.setProperty("--pet-size",petSize+"px");
-      const nextKey=petSize+":"+count;
+      const nextKey=petSize+":"+count+":"+offsetX+":"+offsetY;
       if(nextKey===layoutKey)return;
       layoutKey=nextKey;
-      location.href="openclaw-pet://resize?size="+encodeURIComponent(petSize)+"&count="+encodeURIComponent(count);
+      location.href="openclaw-pet://resize?size="+encodeURIComponent(petSize)+"&count="+encodeURIComponent(count)+"&offsetX="+encodeURIComponent(offsetX)+"&offsetY="+encodeURIComponent(offsetY);
     }
     function checkWatchdog(){
       if(Date.now()-lastStateAt<watchdogMs||shutdownRequested)return;
@@ -346,7 +356,7 @@ function requestHandler(params: StartOverlayParams): RequestListener {
     }
     if (path === "/state") {
       res.writeHead(200, { ...commonHeaders, "content-type": "application/json", "cache-control": "no-store" });
-      res.end(JSON.stringify(toOverlayState(params.getSnapshot(), effectiveOverlaySize(params))));
+      res.end(JSON.stringify(toOverlayState(params.getSnapshot(), effectiveOverlaySize(params), effectiveWindowOffset(params))));
       return;
     }
     const assetMatch = path?.match(/^\/assets\/([a-zA-Z0-9_-]{1,32})\/spritesheet\.webp$/);
@@ -641,6 +651,10 @@ function sourceSize(params: StartOverlayParams, asset: DisplaySourceAsset): numb
   return params.getSize?.(asset.id) ?? asset.size ?? params.size;
 }
 
+function sourceSizes(params: StartOverlayParams): number[] {
+  return params.assets.map((asset) => sourceSize(params, asset));
+}
+
 function snapshotForSource(params: StartOverlayParams, sourceId: string): DisplaySnapshot {
   return {
     sources: params.getSnapshot().sources.filter((source) => source.id === sourceId),
@@ -654,8 +668,9 @@ export function createOverlayManager(createService: OverlayServiceFactory = crea
   const serviceParams = (params: StartOverlayParams, asset: DisplaySourceAsset, index: number, sizes: number[]): StartOverlayParams => {
     const size = sizes[index] ?? sourceSize(params, asset);
     const getSize = (sourceId?: string) => params.getSize?.(sourceId ?? asset.id) ?? asset.size ?? params.size;
+    const getWindowOffset = () => offsetForSource(index, sourceSizes(params), params.corner);
     return params.assets.length === 1
-      ? { ...params, size, getSize }
+      ? { ...params, size, getSize, getWindowOffset: params.getWindowOffset ?? (() => params.windowOffset ?? { x: 0, y: 0 }) }
       : {
         ...params,
         assets: [asset],
@@ -663,6 +678,7 @@ export function createOverlayManager(createService: OverlayServiceFactory = crea
         windowOffset: offsetForSource(index, sizes, params.corner),
         getSnapshot: () => snapshotForSource(params, asset.id),
         getSize,
+        getWindowOffset,
       };
   };
   const stopCurrent = async (): Promise<void> => {
@@ -680,7 +696,7 @@ export function createOverlayManager(createService: OverlayServiceFactory = crea
     async start(params: StartOverlayParams): Promise<void> {
       await enqueue(async () => {
         const nextKey = overlayDisplayKey(params);
-        const sizes = params.assets.map((asset) => sourceSize(params, asset));
+        const sizes = sourceSizes(params);
         if (activeKey === nextKey && services.length === params.assets.length) {
           if (services.every((service) => service.isActive())) return;
           await Promise.all(params.assets.map((asset, index) => services[index]!.start(serviceParams(params, asset, index, sizes))));

@@ -231,9 +231,9 @@ internal sealed class OverlayWindow : Window
                 if (target.Scheme == "openclaw-pet" && target.Host == "resize")
                 {
                     navigation.Cancel = true;
-                    if (TryParseResize(target, out var size, out var sourceCount))
+                    if (TryParseResize(target, out var size, out var sourceCount, out var offsetX, out var offsetY))
                     {
-                        Dispatcher.BeginInvoke(() => ApplyRuntimeSize(size, sourceCount));
+                        Dispatcher.BeginInvoke(() => ApplyRuntimeLayout(size, sourceCount, offsetX, offsetY));
                     }
                     return;
                 }
@@ -262,15 +262,11 @@ internal sealed class OverlayWindow : Window
         }
     }
 
-    private void ApplyRuntimeSize(int size, int sourceCount)
+    private void ApplyRuntimeLayout(int size, int sourceCount, int offsetX, int offsetY)
     {
-        var oldLeft = Left;
-        var oldRight = Left + Width;
-        var oldBottom = Top + Height;
         Width = Math.Max(size * sourceCount + 220, 320);
         Height = Math.Max(size, 160);
-        Left = options.Corner.EndsWith("left", StringComparison.Ordinal) ? oldLeft : oldRight - Width;
-        if (!options.Corner.StartsWith("top", StringComparison.Ordinal)) Top = oldBottom - Height;
+        PositionInCorner(offsetX, offsetY);
         if (dragSurface is not null)
         {
             dragSurface.Width = size * sourceCount;
@@ -278,10 +274,24 @@ internal sealed class OverlayWindow : Window
         }
     }
 
-    private static bool TryParseResize(Uri target, out int size, out int sourceCount)
+    private void PositionInCorner(int offsetX, int offsetY)
+    {
+        const double edge = 20;
+        var workArea = SystemParameters.WorkArea;
+        Left = (options.Corner.EndsWith("left", StringComparison.Ordinal)
+            ? workArea.Left + edge
+            : workArea.Right - Width - edge) + offsetX;
+        Top = (options.Corner.StartsWith("top", StringComparison.Ordinal)
+            ? workArea.Top + edge
+            : workArea.Bottom - Height - edge) + offsetY;
+    }
+
+    private static bool TryParseResize(Uri target, out int size, out int sourceCount, out int offsetX, out int offsetY)
     {
         size = 0;
         sourceCount = 0;
+        offsetX = 0;
+        offsetY = 0;
         foreach (var pair in target.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
         {
             var parts = pair.Split('=', 2);
@@ -290,6 +300,8 @@ internal sealed class OverlayWindow : Window
             var value = Uri.UnescapeDataString(parts[1]);
             if (name == "size") int.TryParse(value, out size);
             if (name == "count") int.TryParse(value, out sourceCount);
+            if (name == "offsetX") int.TryParse(value, out offsetX);
+            if (name == "offsetY") int.TryParse(value, out offsetY);
         }
         return size is >= 96 and <= 768 && sourceCount is >= 1 and <= 16;
     }

@@ -67,6 +67,19 @@ describe("pet source configuration", () => {
     ]);
   });
 
+  it("requires safe transport for token-authenticated remote sources", () => {
+    expect(resolvePetSources({
+      sources: [
+        { id: "plain", assetDir: "/assets/plain", gateway: { url: "http://gateway.example.test/snapshot", tokenEnv: "PET_TOKEN" } },
+        { id: "loopback", assetDir: "/assets/loopback", gateway: { url: "http://127.0.0.1:18789/snapshot", tokenEnv: "PET_TOKEN" } },
+        { id: "secure", assetDir: "/assets/secure", gateway: { url: "https://gateway.example.test/snapshot", tokenEnv: "PET_TOKEN" } },
+      ],
+    })).toEqual([
+      { id: "loopback", label: "loopback", assetDir: "/assets/loopback", gateway: { url: "http://127.0.0.1:18789/snapshot", tokenEnv: "PET_TOKEN" } },
+      { id: "secure", label: "secure", assetDir: "/assets/secure", gateway: { url: "https://gateway.example.test/snapshot", tokenEnv: "PET_TOKEN" } },
+    ]);
+  });
+
   it("drops invalid and duplicate source ids", () => {
     expect(resolvePetSources({
       sources: [
@@ -75,6 +88,21 @@ describe("pet source configuration", () => {
         { id: "../private", assetDir: "/three" },
       ],
     })).toEqual([{ id: "same", label: "same", assetDir: "/one" }]);
+  });
+
+  it("warns when configured sources are skipped before asset validation", () => {
+    const warn = vi.fn();
+    const coordinator = new SourceCoordinator({
+      config: { sources: [{ id: "remote", gateway: { url: "https://gateway.example.test/snapshot" } }] },
+      getLocalSnapshot: () => localSnapshot,
+      logger: { warn },
+      validateAssetDir: () => true,
+    });
+
+    expect(coordinator.assets()).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(
+      "OpenClaw Pet source remote is invalid and will be skipped. Check id, assetDir, and gateway URL/token transport.",
+    );
   });
 });
 

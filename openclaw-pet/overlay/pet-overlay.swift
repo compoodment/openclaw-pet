@@ -9,9 +9,9 @@ final class DragSurface: NSView {
 
 final class OverlayNavigationDelegate: NSObject, WKNavigationDelegate {
   private let port: Int
-  private let resize: (Int, Int) -> Void
+  private let resize: (Int, Int, Int, Int) -> Void
 
-  init(port: Int, resize: @escaping (Int, Int) -> Void) {
+  init(port: Int, resize: @escaping (Int, Int, Int, Int) -> Void) {
     self.port = port
     self.resize = resize
   }
@@ -31,8 +31,10 @@ final class OverlayNavigationDelegate: NSObject, WKNavigationDelegate {
       let values = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
       let size = values.first(where: { $0.name == "size" }).flatMap { Int($0.value ?? "") }
       let count = values.first(where: { $0.name == "count" }).flatMap { Int($0.value ?? "") }
+      let offsetX = values.first(where: { $0.name == "offsetX" }).flatMap { Int($0.value ?? "") } ?? 0
+      let offsetY = values.first(where: { $0.name == "offsetY" }).flatMap { Int($0.value ?? "") } ?? 0
       if let size, let count, (96...768).contains(size), (1...16).contains(count) {
-        resize(size, count)
+        resize(size, count, offsetX, offsetY)
       }
       return
     }
@@ -63,12 +65,11 @@ panel.isOpaque = false; panel.backgroundColor = NSColor.clear; panel.hasShadow =
 let web = WKWebView(frame: panel.contentView!.bounds); web.setValue(false, forKey: "drawsBackground")
 web.autoresizingMask = [.width, .height]
 var dragSurface: DragSurface?
-let navigationDelegate = OverlayNavigationDelegate(port: port) { nextSize, nextCount in
-  let oldFrame = panel.frame
+let navigationDelegate = OverlayNavigationDelegate(port: port) { nextSize, nextCount, nextOffsetX, nextOffsetY in
   let nextWidth = max(CGFloat(nextSize * nextCount) + activityWidth, 320)
   let nextHeight = max(CGFloat(nextSize), 160)
-  let nextX = corner.contains("left") ? oldFrame.minX : oldFrame.maxX - nextWidth
-  let nextY = corner.contains("top") ? oldFrame.maxY - nextHeight : oldFrame.minY
+  let nextX = (corner.contains("left") ? frame.minX + edge : frame.maxX - nextWidth - edge) + CGFloat(nextOffsetX)
+  let nextY = (corner.contains("top") ? frame.maxY - nextHeight - edge : frame.minY + edge) + CGFloat(nextOffsetY)
   panel.setFrame(NSRect(x: nextX, y: nextY, width: nextWidth, height: nextHeight), display: true)
   dragSurface?.frame = NSRect(x: nextWidth - CGFloat(nextSize * nextCount), y: 0, width: CGFloat(nextSize * nextCount), height: CGFloat(max(1, nextSize - 38)))
 }

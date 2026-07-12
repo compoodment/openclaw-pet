@@ -79,7 +79,19 @@ describe("plugin bridge registration", () => {
 
     subscription.handle({
       stream: "item",
-      data: { text: "raw model reasoning should stay local" },
+      data: {
+        text: "raw model reasoning should stay local",
+        title: "secret item title should stay local",
+        status: "secret item status should stay local",
+      },
+    });
+    subscription.handle({
+      stream: "acp",
+      data: {
+        eventType: "progress",
+        title: "secret acp title should stay local",
+        status: "secret acp status should stay local",
+      },
     });
 
     const bridge = registered.gatewayMethods.get(BRIDGE_SNAPSHOT_METHOD);
@@ -88,5 +100,7 @@ describe("plugin bridge registration", () => {
     const wire = JSON.stringify(payload);
     expect(wire).not.toContain("raw model reasoning");
     expect(wire).not.toContain("should stay local");
+    expect(wire).not.toContain("secret item");
+    expect(wire).not.toContain("secret acp");
   });
 });

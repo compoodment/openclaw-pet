@@ -30,7 +30,24 @@
                 "pollIntervalMs": { "type": "integer", "minimum": 250, "maximum": 60000, "default": 1000 },
                 "timeoutMs": { "type": "integer", "minimum": 250, "maximum": 30000, "default": 5000 }
               },
-              "required": ["url"]
+              "required": ["url"],
+              "allOf": [
+                {
+                  "if": { "required": ["tokenEnv"] },
+                  "then": {
+                    "properties": {
+                      "url": {
+                        "type": "string",
+                        "anyOf": [
+                          { "pattern": "^https://" },
+                          { "pattern": "^http://(localhost|127\\.0\\.0\\.1|\\[::1\\])($|:|/)" }
+                        ],
+                        "description": "Token-authenticated bridges must use HTTPS, except loopback HTTP for local development or SSH tunnels."
+                      }
+                    }
+                  }
+                }
+              ]
             }
           },
           "required": ["id"]

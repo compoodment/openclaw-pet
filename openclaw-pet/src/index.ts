@@ -9,13 +9,6 @@ function safeToolName(data: Record<string, unknown>): string | undefined {
   return typeof value === "string" && /^[a-zA-Z0-9_:-]{1,48}$/.test(value) ? value : undefined;
 }
 
-function safeProgressLabel(data: Record<string, unknown>): string | undefined {
-  const value = data.title ?? data.status;
-  if (typeof value !== "string") return undefined;
-  const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized.length > 0 && normalized.length <= 140 ? normalized : undefined;
-}
-
 const plugin: OpenClawPluginDefinition = definePluginEntry({
   id: "openclaw-pet",
   name: "OpenClaw Pet",
@@ -153,17 +146,16 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
         if (event.stream === "acp") {
           const eventType = String(event.data.eventType ?? "").toLowerCase();
           if (eventType === "tool_call") {
-            const detail = safeProgressLabel(event.data);
             if (phase.includes("result") || phase.includes("complete")) pet.toolFinished(false);
-            else pet.toolStarted(safeToolName(event.data) ?? detail);
+            else pet.toolStarted(safeToolName(event.data));
             return;
           }
           if (eventType === "error") { pet.agentEnded(true); return; }
-          pet.progress(safeProgressLabel(event.data) ?? "Working");
+          pet.progress("Working");
           return;
         }
         if (event.stream === "item") {
-          pet.progress(safeProgressLabel(event.data) ?? "Working");
+          pet.progress("Working");
           return;
         }
         if (event.stream === "tool") {

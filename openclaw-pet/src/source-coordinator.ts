@@ -78,6 +78,23 @@ function normalizeSourceSize(value: unknown): number | undefined {
     : undefined;
 }
 
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "[::1]";
+}
+
+function normalizeGateway(gateway: PetSourceConfig["gateway"]): PetSourceConfig["gateway"] | undefined {
+  if (!gateway) return undefined;
+  try {
+    const url = new URL(gateway.url);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    if (gateway.tokenEnv && url.protocol === "http:" && !isLoopbackHost(url.hostname)) return undefined;
+    return gateway;
+  } catch {
+    return undefined;
+  }
+}
+
 export function resolvePetSources(config: PetConfig): ResolvedSource[] {
   const configured = config.sources?.length
     ? config.sources
@@ -90,6 +107,8 @@ export function resolvePetSources(config: PetConfig): ResolvedSource[] {
     const id = normalizeSourceId(source.id);
     const assetDir = source.assetDir ?? config.assetDir;
     const size = normalizeSourceSize(source.size);
+    const gateway = normalizeGateway(source.gateway);
+    if (source.gateway && !gateway) continue;
     if (!id || seen.has(id) || typeof assetDir !== "string" || assetDir.length === 0) continue;
     seen.add(id);
     result.push({
@@ -97,7 +116,7 @@ export function resolvePetSources(config: PetConfig): ResolvedSource[] {
       label: normalizeSourceLabel(source.label, id),
       assetDir,
       ...(size ? { size } : {}),
-      ...(source.gateway ? { gateway: source.gateway } : {}),
+      ...(gateway ? { gateway } : {}),
     });
   }
   return result;
@@ -156,6 +175,14 @@ export class SourceCoordinator {
 
   constructor(options: SourceCoordinatorOptions) {
     this.sources = resolvePetSources(options.config);
+    if (options.config.sources?.length) {
+      const resolvedIds = new Set(this.sources.map((source) => source.id));
+      for (const source of options.config.sources) {
+        if (resolvedIds.has(source.id)) continue;
+        const id = normalizeSourceId(source.id) ?? "<invalid>";
+        options.logger.warn(`OpenClaw Pet source ${id} is invalid and will be skipped. Check id, assetDir, and gateway URL/token transport.`);
+      }
+    }
     this.displaySources = this.sources.filter((source) => {
       const valid = options.validateAssetDir?.(source.assetDir) ?? validateAssets(source.assetDir).valid;
       if (!valid) options.logger.warn(`OpenClaw Pet source ${source.id} has invalid display assets and will be skipped.`);

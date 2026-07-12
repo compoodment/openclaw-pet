@@ -22,7 +22,7 @@
     "overlay/windows/Program.cs"
   ],
   "peerDependencies": {
-    "openclaw": ">=2026.5.17"
+    "openclaw": ">=2026.6.11"
   },
   "dependencies": {
     "typebox": "^1.1.38"

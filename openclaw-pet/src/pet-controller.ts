@@ -73,7 +73,12 @@ export function createPetController(config: PetConfig = {}) {
   let idleTimer: NodeJS.Timeout | undefined;
   const set = (next: Animation, event = lastEvent, label = activityLabel) => { animation = next; changedAt = Date.now(); lastEvent = event; activityLabel = label; };
   const record = (label: string, tone: ActivityItem["tone"]) => { activity = [{ id: Date.now(), label, tone, at: Date.now() }, ...activity].slice(0, 6); };
-  const scheduleIdle = () => { clearTimeout(idleTimer); idleTimer = setTimeout(() => set("idle", "idle", "Ready"), config.idleDelayMs ?? 2500); };
+  const showActiveRun = () => { clearTimeout(idleTimer); set("review", "model-active", "Thinking"); };
+  const scheduleIdle = () => {
+    clearTimeout(idleTimer);
+    if (activeRuns > 0) return;
+    idleTimer = setTimeout(() => set("idle", "idle", "Ready"), config.idleDelayMs ?? 2500);
+  };
   return {
     initialize: () => (validation = validateAssets(config.assetDir)),
     snapshot: (): PetSnapshot => ({ ...validation, animation, changedAt, activeRuns, activityCount, lastEvent, activityLabel, activity, message: validation.valid ? `Pet is ${animation}; last event: ${lastEvent}.` : validation.message }),
@@ -82,7 +87,7 @@ export function createPetController(config: PetConfig = {}) {
     modelStarted: () => { activityCount += 1; activeRuns += 1; clearTimeout(idleTimer); set("review", "model-started", "Thinking"); record("Model is thinking", "active"); },
     toolStarted: (toolName?: string) => { activityCount += 1; clearTimeout(idleTimer); const label = toolName ? `Running ${toolName}` : "Running tool"; set("running", "tool-started", label); record(label, "active"); },
     progress: (label: string) => { activityCount += 1; clearTimeout(idleTimer); set("review", "progress", label); record(label, "active"); },
-    toolFinished: (failed: boolean) => { activityCount += 1; const label = failed ? "Tool failed" : "Tool complete"; set(failed ? "failed" : "waiting", failed ? "tool-failed" : "tool-finished", label); record(label, failed ? "error" : "success"); if (!failed) scheduleIdle(); },
-    agentEnded: (failed: boolean) => { activityCount += 1; activeRuns = Math.max(0, activeRuns - 1); const label = failed ? "Task failed" : "Task complete"; set(failed ? "failed" : "jumping", failed ? "agent-failed" : "agent-finished", label); record(label, failed ? "error" : "success"); scheduleIdle(); },
+    toolFinished: (failed: boolean) => { activityCount += 1; const label = failed ? "Tool failed" : "Tool complete"; set(failed ? "failed" : "waiting", failed ? "tool-failed" : "tool-finished", label); record(label, failed ? "error" : "success"); if (activeRuns > 0) showActiveRun(); else if (!failed) scheduleIdle(); },
+    agentEnded: (failed: boolean) => { activityCount += 1; activeRuns = Math.max(0, activeRuns - 1); const label = failed ? "Task failed" : "Task complete"; record(label, failed ? "error" : "success"); if (activeRuns > 0) { showActiveRun(); return; } set(failed ? "failed" : "jumping", failed ? "agent-failed" : "agent-finished", label); scheduleIdle(); },
   };
 }
